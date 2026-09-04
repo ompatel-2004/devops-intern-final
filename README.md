@@ -18,11 +18,3 @@
 
 \---
 
-
-
-\## 1. Architecture Overview
-
-
-
-This project sets up an automated deployment pipeline and log monitoring stack for an unprivileged NGINX application.
-
