@@ -8,24 +8,24 @@ echo "=========================================="
 echo "User / Effective UID:"
 printf "  User: %s (UID: %s)\n" "$(id -un)" "$(id -u)"
 
-echo "\nHostname & Kernel:"
+printf "\nHostname & Kernel:\n"
 printf "  Hostname: %s\n" "$(hostname)"
 printf "  Kernel:   %s\n" "$(uname -r)"
 
-echo "\nSystem Date (ISO-8601):"
+printf "\nSystem Date (ISO-8601):\n"
 printf "  %s\n" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-echo "\nDisk Usage:"
+printf "\nDisk Usage:\n"
 df -h / | awk 'NR==1 || NR==2 {print "  " $0}'
 
-echo "\nMemory Usage:"
+printf "\nMemory Usage:\n"
 if command -v free >/dev/null 2>&1; then
     free -h | awk '{print "  " $0}'
 else
     echo "  'free' utility not available on this host"
 fi
 
-echo "\nDocker Daemon Status:"
+printf "\nDocker Daemon Status:\n"
 if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
         echo "  Docker is running"

@@ -21,10 +21,11 @@ jobs:
         run: |
           shellcheck scripts/*.sh
 
-      - name: Lint Dockerfile with Hadolint
+- name: Lint Dockerfile with Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: app/Dockerfile
+          failure-threshold: error
 
   build:
     name: Build Container Image

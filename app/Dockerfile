@@ -1,4 +1,4 @@
-FROM nginx:1.27-alpine
+FROM nginx:1.27.4-alpine
 
 ARG BUILD_SHA=development
 ENV BUILD_SHA=${BUILD_SHA}
@@ -6,7 +6,6 @@ ENV BUILD_SHA=${BUILD_SHA}
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY index.html /usr/share/nginx/html/index.html
 
-# Replace placeholder with BUILD_SHA and ensure unprivileged permissions
 RUN sed -i "s/__BUILD_SHA__/${BUILD_SHA}/g" /usr/share/nginx/html/index.html && \
     chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
     touch /tmp/nginx.pid && \
