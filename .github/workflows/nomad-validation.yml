@@ -33,11 +33,13 @@ jobs:
         env:
           CONSUL_VERSION: "1.20.3"
         run: |
-          curl -fsSLo consul.zip \
+          curl -fsSLo /tmp/consul.zip \
             "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip"
 
-          unzip -o consul.zip
-          sudo install consul /usr/local/bin/consul
+          mkdir -p /tmp/consul-bin
+          unzip -o /tmp/consul.zip -d /tmp/consul-bin
+
+          sudo install /tmp/consul-bin/consul /usr/local/bin/consul
 
           consul version
 
@@ -45,11 +47,14 @@ jobs:
         env:
           NOMAD_VERSION: "1.9.7"
         run: |
-          curl -fsSLo nomad.zip \
+          mkdir -p /tmp/nomad-bin
+
+          curl -fsSLo /tmp/nomad.zip \
             "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
 
-          unzip -o nomad.zip
-          sudo install nomad /usr/local/bin/nomad
+          unzip -o /tmp/nomad.zip -d /tmp/nomad-bin
+
+          sudo install /tmp/nomad-bin/nomad /usr/local/bin/nomad
 
           nomad version
 
@@ -85,16 +90,29 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin
 
+      - name: Determine Image Tag
+        id: image
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          IMAGE_TAG="sha-${HEAD_SHA:0:7}"
+          echo "Using published image tag: ${IMAGE_TAG}"
+          echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Plan Nomad Job
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
           nomad job plan \
-            -var="image_tag=${{ github.event.workflow_run.head_sha || github.sha }}" \
+            -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
       - name: Run Nomad Job
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
           nomad job run \
-            -var="image_tag=${{ github.event.workflow_run.head_sha || github.sha }}" \
+            -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
       - name: Wait for Healthy Allocation
@@ -113,6 +131,7 @@ jobs:
               STATUS=$(nomad alloc status "${ALLOC_ID}" -json)
 
               CLIENT_STATUS=$(echo "${STATUS}" | jq -r '.ClientStatus')
+
               HEALTHY=$(echo "${STATUS}" | jq -r '
                 [.TaskStates[].Events[]?.DisplayMessage]
                 | map(select(test("healthy"; "i")))
