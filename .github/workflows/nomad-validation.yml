@@ -37,7 +37,6 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
-
           echo "Using image tag: ${HEAD_SHA}"
           echo "tag=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
@@ -217,24 +216,40 @@ jobs:
 
           echo "===== LATEST NOMAD DEPLOYMENT ====="
 
-          nomad job deployments \
-            -latest \
-            -no-color \
-            nginx-app
-
-          echo ""
-          echo "===== VERIFYING DEPLOYMENT STATUS ====="
-
-          DEPLOYMENT_OUTPUT=$(
+          DEPLOYMENT_JSON=$(
             nomad job deployments \
+              -json \
               -latest \
-              -no-color \
               nginx-app
           )
 
-          echo "${DEPLOYMENT_OUTPUT}"
+          echo "${DEPLOYMENT_JSON}" | jq .
 
-          if ! echo "${DEPLOYMENT_OUTPUT}" | grep -qE '[[:space:]]successful[[:space:]]+Deployment completed successfully'; then
+          DEPLOYMENT_STATUS=$(
+            echo "${DEPLOYMENT_JSON}" |
+            jq -r '
+              if type == "array"
+              then .[0].Status
+              else .Status
+              end
+            '
+          )
+
+          DEPLOYMENT_DESCRIPTION=$(
+            echo "${DEPLOYMENT_JSON}" |
+            jq -r '
+              if type == "array"
+              then .[0].StatusDescription
+              else .StatusDescription
+              end
+            '
+          )
+
+          echo ""
+          echo "Deployment Status: ${DEPLOYMENT_STATUS}"
+          echo "Deployment Description: ${DEPLOYMENT_DESCRIPTION}"
+
+          if [ "${DEPLOYMENT_STATUS}" != "successful" ]; then
             echo ""
             echo "ERROR: Latest Nomad deployment is not successful."
             exit 1
