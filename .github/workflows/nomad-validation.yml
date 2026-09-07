@@ -33,7 +33,7 @@ jobs:
 
       - name: Start Consul Agent (Dev Mode)
         run: |
-          consul agent -dev -client=127.0.0.1 &
+          consul agent -dev -client=0.0.0.0 &
           sleep 4
           consul members
 
@@ -60,28 +60,35 @@ jobs:
       - name: Wait for Allocation to be Running
         run: |
           echo "Waiting for task allocation..."
-          for i in {1..20}; do
+          for i in {1..30}; do
             STATUS=$(nomad job status nginx-app | awk '/running/ {print $1}' | head -n 1)
             if [ -n "$STATUS" ]; then
               echo "Allocation is running!"
               break
             fi
-            echo "Waiting ($i/20)..."
+            echo "Waiting ($i/30)..."
             sleep 2
           done
           nomad job status nginx-app
 
-      - name: Verify Application HTTP Health
-        run: |
-          echo "Testing http://localhost:8080/healthz directly..."
-          timeout 30s sh -c 'until curl -s -f http://localhost:8080/healthz; do sleep 2; done'
-          RESPONSE=$(curl -s http://localhost:8080/healthz)
-          echo "Response: $RESPONSE"
-          chmod +x scripts/healthcheck.sh
-          ./scripts/healthcheck.sh http://localhost:8080/healthz
-
-      - name: Final Validation Summary
+      - name: Verify Allocation Details via JSON
         run: |
           ALLOC_ID=$(nomad job allocs -json nginx-app | jq -r '.[0].ID')
           echo "Nomad Allocation ID: $ALLOC_ID"
           nomad alloc status "$ALLOC_ID"
+
+      - name: Verify Service in Consul
+        run: |
+          sleep 5
+          consul catalog services
+          consul health service nginx-app
+
+      - name: Query Application Health via Dynamic Port
+        run: |
+          ALLOC_ID=$(nomad job allocs -json nginx-app | jq -r '.[0].ID')
+          HOST_PORT=$(nomad alloc status -json "$ALLOC_ID" | jq -r '.AllocatedResources.Shared.Networks[0].DynamicPorts[] | select(.Label=="http") | .Value')
+          echo "Dynamically mapped host port: $HOST_PORT"
+          timeout 30s sh -c "until curl -s -f http://127.0.0.1:${HOST_PORT}/healthz; do sleep 2; done"
+          curl -i "http://127.0.0.1:${HOST_PORT}/healthz"
+          chmod +x scripts/healthcheck.sh
+          ./scripts/healthcheck.sh "http://127.0.0.1:${HOST_PORT}/healthz"
