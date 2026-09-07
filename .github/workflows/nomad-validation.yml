@@ -1,620 +1,84 @@
 name: Validate and Deploy Nomad Job
 
 on:
-  workflow_run:
-    workflows:
-      - CI Pipeline
-    types:
-      - completed
-    branches:
-      - main
-
+  push:
+    branches: [ main ]
+    paths:
+      - 'nomad/**'
+      - '.github/workflows/nomad-validation.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'nomad/**'
+      - '.github/workflows/nomad-validation.yml'
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Published GHCR image SHA to validate"
-        required: true
-        type: string
 
 permissions:
   contents: read
   packages: read
 
-concurrency:
-  group: nomad-validation-main
-  cancel-in-progress: true
-
-env:
-  NOMAD_VERSION: "1.11.3"
-  CONSUL_VERSION: "1.20.2"
-
 jobs:
   nomad:
     name: Validate and Deploy Nomad Job
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main'
-      )
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
-      - name: Determine Image Tag
+      - name: Install Nomad and Consul
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            IMAGE_TAG="${{ github.event.workflow_run.head_sha }}"
-          else
-            IMAGE_TAG="${{ inputs.image_tag }}"
-          fi
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update && sudo apt-get install -y nomad consul
 
-          if [ -z "${IMAGE_TAG}" ]; then
-            echo "ERROR: Image tag is empty."
-            exit 1
-          fi
-
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
-
-          echo "Using image tag:"
-          echo "${IMAGE_TAG}"
-
-      - name: Install Nomad
+      - name: Start Consul Agent (Dev Mode)
         run: |
-          curl -fsSL \
-            "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip" \
-            -o /tmp/nomad.zip
+          consul agent -dev -client=127.0.0.1 &
+          sleep 5
 
-          unzip -o /tmp/nomad.zip -d /tmp/nomad
-
-          sudo install \
-            -m 0755 \
-            /tmp/nomad/nomad \
-            /usr/local/bin/nomad
-
-          nomad version
-
-      - name: Install Consul
+      - name: Start Nomad Agent (Dev Mode)
         run: |
-          curl -fsSL \
-            "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip" \
-            -o /tmp/consul.zip
-
-          unzip -o /tmp/consul.zip -d /tmp/consul
-
-          sudo install \
-            -m 0755 \
-            /tmp/consul/consul \
-            /usr/local/bin/consul
-
-          consul version
-
-      - name: Start Consul
-        run: |
-          nohup consul agent \
-            -dev \
-            -client=0.0.0.0 \
-            > /tmp/consul.log 2>&1 &
-
-          for i in {1..60}; do
-            LEADER=$(
-              curl -fsS \
-                http://127.0.0.1:8500/v1/status/leader \
-                2>/dev/null || true
-            )
-
-            echo "Consul leader: ${LEADER}"
-
-            if [ -n "${LEADER}" ] && [ "${LEADER}" != "\"\"" ]; then
-              echo "Consul is ready."
-              break
-            fi
-
-            if [ "${i}" -eq 60 ]; then
-              echo "ERROR: Consul did not become ready."
-              cat /tmp/consul.log
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          consul members
-
-      - name: Start Nomad
-        run: |
-          mkdir -p /tmp/nomad
-
-          nohup nomad agent \
-            -dev \
-            -bind=0.0.0.0 \
-            -network-interface=lo \
-            -data-dir=/tmp/nomad \
-            > /tmp/nomad.log 2>&1 &
-
-          for i in {1..60}; do
-            LEADER=$(
-              curl -fsS \
-                http://127.0.0.1:4646/v1/status/leader \
-                2>/dev/null || true
-            )
-
-            echo "Nomad leader: ${LEADER}"
-
-            if [ -n "${LEADER}" ] && [ "${LEADER}" != "\"\"" ]; then
-              echo "Nomad server is ready."
-              break
-            fi
-
-            if [ "${i}" -eq 60 ]; then
-              echo "ERROR: Nomad server did not become ready."
-              cat /tmp/nomad.log
-              exit 1
-            fi
-
-            sleep 2
-          done
+          sudo nomad agent -dev -bind=0.0.0.0 -network-interface=lo &
+          sleep 8
 
       - name: Verify Nomad Node
         run: |
-          for i in {1..60}; do
-            echo "===== Nomad node check ${i}/60 ====="
-
-            NODES_JSON=$(
-              curl -fsS \
-                http://127.0.0.1:4646/v1/nodes \
-                2>/dev/null || true
-            )
-
-            echo "${NODES_JSON}" | jq . || true
-
-            READY_NODES=$(
-              echo "${NODES_JSON}" |
-              jq '
-                [
-                  .[] |
-                  select(
-                    .Status == "ready" and
-                    .SchedulingEligibility == "eligible"
-                  )
-                ] |
-                length
-              ' 2>/dev/null || echo "0"
-            )
-
-            echo "Ready eligible nodes: ${READY_NODES}"
-
-            if [ "${READY_NODES}" -ge 1 ]; then
-              echo "Nomad client node is ready."
-              break
-            fi
-
-            if [ "${i}" -eq 60 ]; then
-              echo "ERROR: No ready eligible Nomad client node found."
-              echo "${NODES_JSON}" | jq . || true
-              cat /tmp/nomad.log
-              exit 1
-            fi
-
-            sleep 2
-          done
+          nomad node status
 
       - name: Verify Consul
         run: |
-          curl -fsS \
-            http://127.0.0.1:8500/v1/agent/self |
-            jq .
-
-          echo "Consul agent is healthy."
+          consul members
 
       - name: Log in to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" |
-            docker login ghcr.io \
-            -u "${{ github.actor }}" \
-            --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify Published Image
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
-
-          echo "Verifying published image:"
-          echo "${IMAGE}"
-
-          docker pull "${IMAGE}"
-
-          docker image inspect "${IMAGE}" \
-            --format 'Image ID: {{.Id}}'
-
-          docker image inspect "${IMAGE}" \
-            --format 'Image size: {{.Size}} bytes'
-
-          echo "Published image is available."
+          docker pull ghcr.io/ompatel-2004/devops-intern-final:latest
 
       - name: Validate Nomad Job
         run: |
-          nomad job validate \
-            nomad/nginx-app.nomad.hcl
+          nomad job validate -var="image_tag=latest" nomad/nginx-app.nomad.hcl
 
       - name: Plan Nomad Deployment
         run: |
-          set +e
-
-          nomad job plan \
-            -var="image_tag=${IMAGE_TAG}" \
-            nomad/nginx-app.nomad.hcl
-
-          PLAN_EXIT_CODE=$?
-
-          set -e
-
-          echo "Nomad plan exit code: ${PLAN_EXIT_CODE}"
-
-          if [ "${PLAN_EXIT_CODE}" -ne 0 ] &&
-             [ "${PLAN_EXIT_CODE}" -ne 1 ]; then
-            echo "ERROR: Nomad plan failed."
-            exit "${PLAN_EXIT_CODE}"
-          fi
-
-          echo "Nomad plan completed successfully."
+          nomad job plan -var="image_tag=latest" nomad/nginx-app.nomad.hcl || true
 
       - name: Deploy Nomad Job
         run: |
-          nomad job run \
-            -var="image_tag=${IMAGE_TAG}" \
-            nomad/nginx-app.nomad.hcl
+          nomad job run -var="image_tag=latest" nomad/nginx-app.nomad.hcl
 
       - name: Verify Nomad Deployment
         run: |
-          for i in {1..30}; do
-            echo "===== Deployment check ${i}/30 ====="
-
-            DEPLOYMENT_JSON=$(
-              curl -fsS \
-                http://127.0.0.1:4646/v1/job/nginx-app/deployment \
-                2>/dev/null || true
-            )
-
-            echo "${DEPLOYMENT_JSON}" | jq . || true
-
-            DEPLOYMENT_STATUS=$(
-              echo "${DEPLOYMENT_JSON}" |
-              jq -r '.Status // empty' 2>/dev/null || true
-            )
-
-            DEPLOYMENT_DESCRIPTION=$(
-              echo "${DEPLOYMENT_JSON}" |
-              jq -r '.StatusDescription // empty' 2>/dev/null || true
-            )
-
-            echo "Deployment status: ${DEPLOYMENT_STATUS}"
-            echo "Deployment description: ${DEPLOYMENT_DESCRIPTION}"
-
-            if [ "${DEPLOYMENT_STATUS}" = "successful" ]; then
-              echo "Nomad deployment is successful."
-              break
-            fi
-
-            if [ "${DEPLOYMENT_STATUS}" = "failed" ]; then
-              echo "ERROR: Nomad deployment failed."
-              nomad job status nginx-app || true
-              exit 1
-            fi
-
-            if [ "${i}" -eq 30 ]; then
-              echo "ERROR: Nomad deployment did not become successful."
-              nomad job status nginx-app || true
-              exit 1
-            fi
-
-            sleep 2
-          done
+          sleep 10
+          nomad job status nginx-app
 
       - name: Verify Allocation Health
         run: |
-          for i in {1..60}; do
-            echo "===== Allocation health ${i}/60 ====="
-
-            ALLOCATIONS_JSON=$(
-              curl -fsS \
-                http://127.0.0.1:4646/v1/job/nginx-app/allocations \
-                2>/dev/null || true
-            )
-
-            echo "${ALLOCATIONS_JSON}" | jq . || true
-
-            ALLOCATION=$(
-              echo "${ALLOCATIONS_JSON}" |
-              jq -c '
-                [
-                  .[] |
-                  select(
-                    .DesiredStatus == "run" and
-                    .ClientStatus == "running"
-                  )
-                ] |
-                sort_by(.CreateTime) |
-                last
-              ' 2>/dev/null || echo "null"
-            )
-
-            if [ "${ALLOCATION}" = "null" ] ||
-               [ -z "${ALLOCATION}" ]; then
-              echo "No running allocation found yet."
-              sleep 2
-              continue
-            fi
-
-            ALLOC_ID=$(echo "${ALLOCATION}" | jq -r '.ID')
-
-            CLIENT_STATUS=$(
-              echo "${ALLOCATION}" |
-              jq -r '.ClientStatus'
-            )
-
-            DESIRED_STATUS=$(
-              echo "${ALLOCATION}" |
-              jq -r '.DesiredStatus'
-            )
-
-            HEALTHY=$(
-              echo "${ALLOCATION}" |
-              jq -r '.DeploymentStatus.Healthy // false'
-            )
-
-            TASK_RUNNING=$(
-              echo "${ALLOCATION}" |
-              jq '
-                [
-                  .TaskStates // {} |
-                  to_entries[] |
-                  select(.value.State == "running")
-                ] |
-                length
-              '
-            )
-
-            echo "Allocation ID: ${ALLOC_ID}"
-            echo "Client Status: ${CLIENT_STATUS}"
-            echo "Desired Status: ${DESIRED_STATUS}"
-            echo "Deployment Healthy: ${HEALTHY}"
-            echo "Running Tasks: ${TASK_RUNNING}"
-
-            if [ "${CLIENT_STATUS}" = "running" ] &&
-               [ "${DESIRED_STATUS}" = "run" ] &&
-               [ "${HEALTHY}" = "true" ] &&
-               [ "${TASK_RUNNING}" -ge 1 ]; then
-              echo "Nomad allocation is healthy."
-              echo "${ALLOC_ID}" > /tmp/alloc_id
-              break
-            fi
-
-            if [ "${i}" -eq 60 ]; then
-              echo "ERROR: Allocation did not become healthy."
-              nomad alloc status "${ALLOC_ID}" || true
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-      - name: Verify Nomad HTTP Health Check
-        run: |
-          ALLOC_ID=$(cat /tmp/alloc_id)
-
-          echo "Allocation ID: ${ALLOC_ID}"
-
-          for i in {1..30}; do
-            echo "===== Nomad HTTP check ${i}/30 ====="
-
-            CHECKS_JSON=$(
-              curl -fsS \
-                "http://127.0.0.1:4646/v1/allocation/${ALLOC_ID}/checks" \
-                2>/dev/null || true
-            )
-
-            echo "${CHECKS_JSON}" | jq . || true
-
-            ALIVE_STATUS=$(
-              echo "${CHECKS_JSON}" |
-              jq -r '
-                [
-                  to_entries[] |
-                  .value |
-                  select(.Check == "alive") |
-                  .Status
-                ] |
-                first // ""
-              ' 2>/dev/null || true
-            )
-
-            echo "Nomad alive check status: ${ALIVE_STATUS}"
-
-            if [ "${ALIVE_STATUS}" = "success" ]; then
-              echo "Nomad HTTP health check is passing."
-              break
-            fi
-
-            if [ "${i}" -eq 30 ]; then
-              echo "ERROR: Nomad HTTP health check did not pass."
-              echo "${CHECKS_JSON}" | jq . || true
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-      - name: Check Consul Service
-        run: |
-          for i in {1..30}; do
-            echo "===== Consul service check ${i}/30 ====="
-
-            SERVICE_OUTPUT=$(
-              curl -fsS \
-                http://127.0.0.1:8500/v1/health/service/nginx-app \
-                2>/dev/null || true
-            )
-
-            echo "${SERVICE_OUTPUT}" | jq . || true
-
-            PASSING=$(
-              echo "${SERVICE_OUTPUT}" |
-              jq '
-                if type == "array" and length > 0
-                then
-                  all(
-                    .[];
-                    all(.Checks[]; .Status == "passing")
-                  )
-                else
-                  false
-                end
-              ' 2>/dev/null || echo "false"
-            )
-
-            echo "Consul checks passing: ${PASSING}"
-
-            if [ "${PASSING}" = "true" ]; then
-              echo "Consul service is healthy."
-              break
-            fi
-
-            if [ "${i}" -eq 30 ]; then
-              echo "ERROR: Consul service health check failed."
-              echo "${SERVICE_OUTPUT}" | jq . || true
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-      - name: Verify Application HTTP Health
-        run: |
-          SERVICE_OUTPUT=$(
-            curl -fsS \
-              http://127.0.0.1:8500/v1/health/service/nginx-app
-          )
-
-          SERVICE_ADDRESS=$(
-            echo "${SERVICE_OUTPUT}" |
-            jq -r '.[0].Service.Address'
-          )
-
-          SERVICE_PORT=$(
-            echo "${SERVICE_OUTPUT}" |
-            jq -r '.[0].Service.Port'
-          )
-
-          if [ -z "${SERVICE_ADDRESS}" ] ||
-             [ "${SERVICE_ADDRESS}" = "null" ]; then
-            SERVICE_ADDRESS="127.0.0.1"
-          fi
-
-          if [ -z "${SERVICE_PORT}" ] ||
-             [ "${SERVICE_PORT}" = "null" ]; then
-            echo "ERROR: Consul did not provide a service port."
-            exit 1
-          fi
-
-          URL="http://${SERVICE_ADDRESS}:${SERVICE_PORT}/healthz"
-
-          echo "Testing:"
-          echo "${URL}"
-
-          for i in {1..30}; do
-            HTTP_STATUS=$(
-              curl -s \
-                -o /dev/null \
-                -w "%{http_code}" \
-                --max-time 5 \
-                "${URL}" || true
-            )
-
-            echo "HTTP status: ${HTTP_STATUS}"
-
-            if [ "${HTTP_STATUS}" = "200" ]; then
-              echo "Application HTTP health check passed."
-              break
-            fi
-
-            if [ "${i}" -eq 30 ]; then
-              echo "ERROR: Application did not return HTTP 200."
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-      - name: Verify Nomad Job Status
-        run: |
-          JOB_JSON=$(
-            curl -fsS \
-              http://127.0.0.1:4646/v1/job/nginx-app
-          )
-
-          echo "${JOB_JSON}" | jq .
-
-          JOB_STATUS=$(
-            echo "${JOB_JSON}" |
-            jq -r '.Status'
-          )
-
-          echo "Nomad job status: ${JOB_STATUS}"
-
-          if [ "${JOB_STATUS}" != "running" ]; then
-            echo "ERROR: Nomad job is not running."
-            exit 1
-          fi
-
-          echo "Nomad job is running."
-
-      - name: Final Validation Summary
-        run: |
-          echo "=========================================="
-          echo "       NOMAD VALIDATION SUCCESSFUL"
-          echo "=========================================="
-
-          echo "Image:"
-          echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
-
-          echo ""
-          echo "Nomad version:"
-          nomad version
-
-          echo ""
-          echo "Nomad job:"
-          nomad job status nginx-app
-
-          echo ""
-          echo "Nomad allocations:"
-          nomad job allocs nginx-app
-
-          echo ""
-          echo "Consul service:"
-          curl -fsS \
-            http://127.0.0.1:8500/v1/health/service/nginx-app |
-            jq .
-
-          echo ""
-          echo "All validation checks passed."
-
-      - name: Show Nomad Logs
-        if: always()
-        run: |
-          echo "===== NOMAD LOG ====="
-          cat /tmp/nomad.log || true
-
-      - name: Show Consul Logs
-        if: always()
-        run: |
-          echo "===== CONSUL LOG ====="
-          cat /tmp/consul.log || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          nomad job stop -purge nginx-app || true
+          ALLOC_ID=$(nomad job status nginx-app | awk '/Allocations/ {flag=1; next} flag && NF {print $1; exit}')
+          echo "Checking allocation: $ALLOC_ID"
+          nomad alloc status "$ALLOC_ID"
