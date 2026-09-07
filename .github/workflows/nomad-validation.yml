@@ -45,9 +45,13 @@ jobs:
             "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip"
 
           mkdir -p /tmp/consul-bin
-          unzip -o /tmp/consul.zip -d /tmp/consul-bin
 
-          sudo install /tmp/consul-bin/consul /usr/local/bin/consul
+          unzip -o /tmp/consul.zip \
+            -d /tmp/consul-bin
+
+          sudo install \
+            /tmp/consul-bin/consul \
+            /usr/local/bin/consul
 
           consul version
 
@@ -59,9 +63,13 @@ jobs:
             "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
 
           mkdir -p /tmp/nomad-bin
-          unzip -o /tmp/nomad.zip -d /tmp/nomad-bin
 
-          sudo install /tmp/nomad-bin/nomad /usr/local/bin/nomad
+          unzip -o /tmp/nomad.zip \
+            -d /tmp/nomad-bin
+
+          sudo install \
+            /tmp/nomad-bin/nomad \
+            /usr/local/bin/nomad
 
           nomad version
 
@@ -74,6 +82,7 @@ jobs:
 
           sleep 5
 
+          echo "===== CONSUL MEMBERS ====="
           consul members
 
       - name: Start Nomad
@@ -84,6 +93,7 @@ jobs:
 
           sleep 10
 
+          echo "===== NOMAD NODES ====="
           nomad node status
 
       - name: Validate Nomad Job
@@ -105,37 +115,75 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
-          echo "Pulling:"
+          echo "===== VERIFYING GHCR IMAGE ====="
           echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
 
           docker pull \
-            ghcr.io/${{ github.repository }}:${IMAGE_TAG}
+            "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
 
       - name: Plan Nomad Job
         env:
           IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
+          echo "===== NOMAD PLAN ====="
+
+          set +e
+
           nomad job plan \
             -var="image_tag=${IMAGE_TAG}" \
-            nomad/nginx-app.nomad.hcl
+            -no-color \
+            nomad/nginx-app.nomad.hcl \
+            2>&1 | tee /tmp/nomad-plan.txt
+
+          PLAN_EXIT=${PIPESTATUS[0]}
+
+          set -e
+
+          echo "Nomad plan exit code: ${PLAN_EXIT}"
+
+          if [ "${PLAN_EXIT}" -eq 0 ]; then
+            echo "Nomad plan completed successfully with no allocation changes."
+            exit 0
+          fi
+
+          if [ "${PLAN_EXIT}" -eq 1 ]; then
+            echo "Nomad plan completed successfully and reports allocation changes."
+            echo "Exit code 1 is expected when the plan creates or destroys allocations."
+            exit 0
+          fi
+
+          echo "ERROR: Nomad plan failed."
+          exit "${PLAN_EXIT}"
 
       - name: Run Nomad Job
         env:
           IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
+          echo "===== DEPLOYING NOMAD JOB ====="
+
           nomad job run \
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
       - name: Wait for Healthy Allocation
         run: |
+          echo "===== WAITING FOR HEALTHY ALLOCATION ====="
+
           for i in {1..30}; do
+            echo ""
             echo "===== Attempt ${i}/30 ====="
 
             nomad job status nginx-app || true
 
-            ALLOC_ID=$(nomad job allocs nginx-app -json 2>/dev/null | \
-              jq -r '.[] | select(.ClientStatus == "running") | .ID' | head -n 1)
+            ALLOC_ID=$(
+              nomad job allocs nginx-app -json 2>/dev/null |
+              jq -r '
+                .[]
+                | select(.ClientStatus == "running")
+                | .ID
+              ' |
+              head -n 1
+            )
 
             if [ -n "${ALLOC_ID}" ]; then
               echo "Running allocation: ${ALLOC_ID}"
@@ -144,17 +192,24 @@ jobs:
 
               CLIENT_STATUS=$(echo "${STATUS}" | jq -r '.ClientStatus')
 
-              HEALTHY=$(echo "${STATUS}" | jq -r '
-                [.TaskStates[].Events[]?.DisplayMessage]
-                | map(select(test("healthy"; "i")))
-                | length
-              ')
+              HEALTHY=$(
+                echo "${STATUS}" |
+                jq -r '
+                  [
+                    .TaskStates[].Events[]?.DisplayMessage
+                  ]
+                  | map(select(test("healthy"; "i")))
+                  | length
+                '
+              )
 
               echo "Client status: ${CLIENT_STATUS}"
               echo "Healthy events: ${HEALTHY}"
 
-              if [ "${CLIENT_STATUS}" = "running" ] && [ "${HEALTHY}" -gt 0 ]; then
-                echo "Nomad allocation is running and has reported healthy."
+              if [ "${CLIENT_STATUS}" = "running" ] &&
+                 [ "${HEALTHY}" -gt 0 ]; then
+
+                echo "Nomad allocation is running and healthy."
                 exit 0
               fi
             fi
@@ -167,16 +222,21 @@ jobs:
 
       - name: Check Consul Service
         run: |
+          echo "===== CONSUL SERVICE HEALTH ====="
+
           consul health service nginx-app
 
-      - name: Final Nomad Status
-        if: always()
+      - name: Verify Nomad Job Status
         run: |
-          echo "===== NOMAD JOB STATUS ====="
-          nomad job status nginx-app || true
+          echo "===== FINAL NOMAD JOB STATUS ====="
 
-          echo "===== NOMAD NODE STATUS ====="
-          nomad node status || true
+          nomad job status nginx-app
+
+      - name: Verify Nomad Node Status
+        run: |
+          echo "===== FINAL NOMAD NODE STATUS ====="
+
+          nomad node status
 
       - name: Show Agent Logs
         if: always()
@@ -184,5 +244,13 @@ jobs:
           echo "===== CONSUL LOG ====="
           cat /tmp/consul.log || true
 
+          echo ""
           echo "===== NOMAD LOG ====="
           cat /tmp/nomad.log || true
+
+      - name: Show Final Nomad Allocation Status
+        if: always()
+        run: |
+          echo "===== NOMAD ALLOCATIONS ====="
+
+          nomad job allocs nginx-app || true
