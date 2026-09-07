@@ -80,8 +80,10 @@ jobs:
       - name: Verify Service in Consul
         run: |
           sleep 5
-          consul catalog services
-          consul health service nginx-app
+          echo "Listing registered services in Consul catalog:"
+          curl -s http://127.0.0.1:8500/v1/catalog/services | jq .
+          echo "Checking service health via Consul API:"
+          curl -s http://127.0.0.1:8500/v1/health/service/nginx-app | jq .
 
       - name: Query Application Health via Dynamic Port
         run: |
