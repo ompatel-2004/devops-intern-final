@@ -29,6 +29,14 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Determine Image Tag
+        id: image
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          echo "Using image tag: ${HEAD_SHA}"
+          echo "tag=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
@@ -36,20 +44,15 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin
 
-      - name: Determine Image Tag
-        id: image
-        env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          IMAGE_TAG="sha-${HEAD_SHA:0:7}"
-          echo "Using published image tag: ${IMAGE_TAG}"
-          echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-
       - name: Pull Published Application Image
         env:
           IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
-          docker pull ghcr.io/${{ github.repository }}:${IMAGE_TAG}
+          echo "Pulling:"
+          echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+
+          docker pull \
+            ghcr.io/${{ github.repository }}:${IMAGE_TAG}
 
       - name: Start NGINX Application
         env:
@@ -64,6 +67,8 @@ jobs:
         run: |
           timeout 30s sh -c \
             'until curl -s -f http://localhost:8080/healthz; do sleep 2; done'
+
+          echo "NGINX health endpoint returned HTTP 200."
 
       - name: Start Monitoring Stack
         working-directory: monitoring
