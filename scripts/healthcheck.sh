@@ -1,7 +1,7 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
-TARGET_URL="${1:-http://localhost:8080/healthz}"
+TARGET_URL="${1:-http://localhost:8080}"
 
 printf "Checking health endpoint: %s ... " "${TARGET_URL}"
 
