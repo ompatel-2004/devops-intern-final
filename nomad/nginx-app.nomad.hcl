@@ -1,6 +1,6 @@
 variable "image_tag" {
   type        = string
-  description = "The Docker image tag to deploy"
+  description = "Docker image tag from GHCR to deploy"
   default     = "latest"
 }
 
@@ -12,22 +12,20 @@ job "nginx-app" {
     count = 1
 
     network {
-      mode = "host"
       port "http" {
-        static = 8080
+        to = 8080
       }
     }
 
     service {
-      name     = "nginx-app"
-      port     = "http"
-      provider = "nomad"
+      name = "nginx-app"
+      port = "http"
 
       check {
         name     = "alive"
         type     = "http"
         path     = "/healthz"
-        interval = "5s"
+        interval = "10s"
         timeout  = "2s"
       }
     }
@@ -35,14 +33,21 @@ job "nginx-app" {
     restart {
       attempts = 3
       interval = "2m"
-      delay    = "5s"
+      delay    = "15s"
       mode     = "fail"
+    }
+
+    reschedule {
+      delay          = "30s"
+      delay_function = "exponential"
+      max_delay      = "1h"
+      unlimited      = true
     }
 
     update {
       max_parallel     = 1
-      min_healthy_time = "5s"
-      healthy_deadline = "1m"
+      min_healthy_time = "10s"
+      healthy_deadline = "2m"
       auto_revert      = true
     }
 
@@ -50,8 +55,8 @@ job "nginx-app" {
       driver = "docker"
 
       config {
-        image        = "ghcr.io/ompatel-2004/devops-intern-final:${var.image_tag}"
-        network_mode = "host"
+        image = "ghcr.io/ompatel-2004/devops-intern-final:${var.image_tag}"
+        ports = ["http"]
       }
 
       resources {
