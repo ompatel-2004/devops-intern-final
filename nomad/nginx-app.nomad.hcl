@@ -1,7 +1,6 @@
 variable "image_tag" {
   type        = string
   description = "The container image tag to deploy from GHCR"
-  default     = "latest"
 }
 
 job "nginx-app" {
