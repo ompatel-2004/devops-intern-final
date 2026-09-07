@@ -102,9 +102,13 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
+          echo "===== VALIDATING NOMAD JOB ====="
+
           nomad job validate \
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
+
+          echo "Nomad job validation passed."
 
       - name: Log in to GHCR
         run: |
@@ -122,6 +126,8 @@ jobs:
 
           docker pull \
             "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+
+          echo "GHCR image pull succeeded."
 
       - name: Plan Nomad Job
         env:
@@ -150,7 +156,7 @@ jobs:
 
           if [ "${PLAN_EXIT}" -eq 1 ]; then
             echo "Nomad plan completed successfully and reports allocation changes."
-            echo "Exit code 1 is expected when the plan creates or destroys allocations."
+            echo "Exit code 1 is expected when allocations will be created or destroyed."
             exit 0
           fi
 
@@ -167,92 +173,145 @@ jobs:
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
+          echo "Nomad job submitted successfully."
+
       - name: Wait for Healthy Allocation
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "===== WAITING FOR HEALTHY ALLOCATION ====="
+
+          ALLOC_ID=""
 
           for i in {1..30}; do
             echo ""
             echo "===== Attempt ${i}/30 ====="
 
-            if ! JOB_STATUS=$(nomad job status -json nginx-app); then
-              echo "Nomad job status is not available yet."
+            echo "Looking for running allocation..."
+
+            ALLOC_ID=$(
+              nomad job allocs -json nginx-app 2>/dev/null |
+              jq -r '
+                [
+                  .[]
+                  | select(.ClientStatus == "running")
+                  | .ID
+                ]
+                | .[0] // empty
+              '
+            )
+
+            if [ -z "${ALLOC_ID}" ]; then
+              echo "No running allocation yet."
               sleep 5
               continue
             fi
 
-            HEALTHY=$(echo "${JOB_STATUS}" | jq -r '
-              .TaskGroups
-              | to_entries
-              | map(.value.Healthy // 0)
-              | add // 0
-            ')
+            echo "Running allocation: ${ALLOC_ID}"
 
-            UNHEALTHY=$(echo "${JOB_STATUS}" | jq -r '
-              .TaskGroups
-              | to_entries
-              | map(.value.Unhealthy // 0)
-              | add // 0
-            ')
+            echo ""
+            echo "===== ALLOCATION STATUS ====="
 
-            RUNNING=$(echo "${JOB_STATUS}" | jq -r '
-              .TaskGroups
-              | to_entries
-              | map(.value.Running // 0)
-              | add // 0
-            ')
+            ALLOC_STATUS=$(nomad alloc status -short "${ALLOC_ID}")
 
-            echo "Running allocations: ${RUNNING}"
-            echo "Healthy allocations: ${HEALTHY}"
-            echo "Unhealthy allocations: ${UNHEALTHY}"
+            echo "${ALLOC_STATUS}"
 
-            if [ "${RUNNING}" -ge 1 ] &&
-               [ "${HEALTHY}" -ge 1 ] &&
-               [ "${UNHEALTHY}" -eq 0 ]; then
+            DEPLOYMENT_HEALTH=$(
+              echo "${ALLOC_STATUS}" |
+              awk -F'=' '
+                /Deployment Health/ {
+                  gsub(/^[ \t]+|[ \t]+$/, "", $2)
+                  print $2
+                  exit
+                }
+              '
+            )
 
-              echo ""
-              echo "SUCCESS: Nomad allocation is running and healthy."
+            echo ""
+            echo "Deployment health: ${DEPLOYMENT_HEALTH:-unknown}"
 
-              echo ""
-              echo "===== NOMAD JOB STATUS ====="
-              nomad job status nginx-app
-
-              echo ""
-              echo "===== RUNNING ALLOCATION ====="
-
-              ALLOC_ID=$(
-                nomad job allocs -json nginx-app |
-                jq -r '
-                  .[]
-                  | select(.ClientStatus == "running")
-                  | .ID
-                ' |
-                head -n 1
-              )
-
-              if [ -n "${ALLOC_ID}" ]; then
-                echo "Allocation ID: ${ALLOC_ID}"
-
-                echo ""
-                echo "===== ALLOCATION STATUS ====="
-                nomad alloc status "${ALLOC_ID}"
-
-                echo ""
-                echo "===== NOMAD SERVICE CHECKS ====="
-                nomad alloc checks "${ALLOC_ID}"
-              else
-                echo "ERROR: Could not determine the running allocation ID."
-                exit 1
-              fi
-
-              exit 0
+            if [ "${DEPLOYMENT_HEALTH}" != "healthy" ]; then
+              echo "Allocation is running but deployment health is not healthy yet."
+              sleep 5
+              continue
             fi
 
-            sleep 5
+            echo ""
+            echo "===== NOMAD SERVICE CHECKS ====="
+
+            CHECKS_JSON=$(nomad alloc checks -json "${ALLOC_ID}")
+
+            echo "${CHECKS_JSON}" | jq .
+
+            ALIVE_CHECK_STATUS=$(
+              echo "${CHECKS_JSON}" |
+              jq -r '
+                [
+                  .[]
+                  | select(.Check == "alive")
+                  | .Status
+                ]
+                | .[0] // empty
+              '
+            )
+
+            echo ""
+            echo "alive check status: ${ALIVE_CHECK_STATUS:-missing}"
+
+            if [ "${ALIVE_CHECK_STATUS}" != "success" ]; then
+              echo "The Nomad 'alive' HTTP health check is not passing yet."
+              sleep 5
+              continue
+            fi
+
+            ALIVE_STATUS_CODE=$(
+              echo "${CHECKS_JSON}" |
+              jq -r '
+                [
+                  .[]
+                  | select(.Check == "alive")
+                  | .StatusCode
+                ]
+                | .[0] // empty
+              '
+            )
+
+            echo "alive check HTTP status code: ${ALIVE_STATUS_CODE:-unknown}"
+
+            if [ "${ALIVE_STATUS_CODE}" != "200" ]; then
+              echo "ERROR: The alive health check is not returning HTTP 200."
+              sleep 5
+              continue
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo "SUCCESS: NOMAD ALLOCATION IS HEALTHY"
+            echo "=========================================="
+            echo "Allocation: ${ALLOC_ID}"
+            echo "Deployment Health: healthy"
+            echo "Service Check: alive"
+            echo "HTTP Status: 200"
+            echo "=========================================="
+
+            exit 0
           done
 
           echo ""
-          echo "ERROR: Nomad allocation did not become healthy."
+          echo "=========================================="
+          echo "ERROR: NOMAD ALLOCATION DID NOT BECOME HEALTHY"
+          echo "=========================================="
+
+          if [ -n "${ALLOC_ID}" ]; then
+            echo ""
+            echo "===== FINAL ALLOCATION STATUS ====="
+            nomad alloc status "${ALLOC_ID}" || true
+
+            echo ""
+            echo "===== FINAL SERVICE CHECKS ====="
+            nomad alloc checks "${ALLOC_ID}" || true
+          fi
 
           echo ""
           echo "===== FINAL NOMAD JOB STATUS ====="
@@ -269,6 +328,8 @@ jobs:
           echo "===== CONSUL SERVICE HEALTH ====="
 
           consul health service nginx-app
+
+          echo "Consul service health check passed."
 
       - name: Verify Nomad Job Status
         run: |
