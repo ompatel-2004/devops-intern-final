@@ -1,8 +1,8 @@
 # DevOps Intern Final Assessment
 
-[![CI Pipeline](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml)
-[![Validate and Deploy Nomad Job](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml)
-[![Observability Validation](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml)
+![CI Pipeline](screenshots/ci-pipeline.png)(https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml)
+![Nomad Allocation & Health](screenshots/nomad-deployment2.png)(https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml)
+![Loki Ingestion](<screenshots/Loki & NGINX Logs.png>)(https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml)
 
 - **Name:** Om Patel
 - **Date:** September 2026
