@@ -22,63 +22,66 @@ jobs:
     name: Validate and Deploy Nomad Job
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Nomad and Consul
+      - name: Install HashiCorp Nomad & Consul
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-          sudo apt-get update && sudo apt-get install -y nomad consul
+          sudo apt-get update && sudo apt-get install -y nomad consul jq
 
       - name: Start Consul Agent (Dev Mode)
         run: |
           consul agent -dev -client=127.0.0.1 &
-          sleep 5
+          sleep 4
+          consul members
 
       - name: Start Nomad Agent (Dev Mode)
         run: |
           sudo nomad agent -dev -bind=0.0.0.0 -network-interface=lo &
-          sleep 8
-
-      - name: Verify Nomad Node
-        run: |
+          sleep 6
           nomad node status
 
-      - name: Verify Consul
+      - name: Pull Container Image from GHCR
         run: |
-          consul members
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify Published Image
-        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker pull ghcr.io/ompatel-2004/devops-intern-final:latest
 
-      - name: Validate Nomad Job
+      - name: Validate Nomad Job File
         run: |
           nomad job validate -var="image_tag=latest" nomad/nginx-app.nomad.hcl
 
-      - name: Plan Nomad Deployment
+      - name: Plan and Run Nomad Job
         run: |
           nomad job plan -var="image_tag=latest" nomad/nginx-app.nomad.hcl || true
-
-      - name: Deploy Nomad Job
-        run: |
           nomad job run -var="image_tag=latest" nomad/nginx-app.nomad.hcl
 
-      - name: Verify Nomad Deployment
+      - name: Wait for Allocation to be Running
         run: |
-          sleep 10
+          echo "Waiting for task allocation..."
+          for i in {1..20}; do
+            STATUS=$(nomad job status nginx-app | awk '/running/ {print $1}' | head -n 1)
+            if [ -n "$STATUS" ]; then
+              echo "Allocation is running!"
+              break
+            fi
+            echo "Waiting ($i/20)..."
+            sleep 2
+          done
           nomad job status nginx-app
 
-      - name: Verify Allocation Health
+      - name: Verify Application HTTP Health
         run: |
-          ALLOC_ID=$(nomad job status nginx-app | awk '/Allocations/ {flag=1; next} flag && NF {print $1; exit}')
-          echo "Checking allocation: $ALLOC_ID"
+          echo "Testing http://localhost:8080/healthz directly..."
+          timeout 30s sh -c 'until curl -s -f http://localhost:8080/healthz; do sleep 2; done'
+          RESPONSE=$(curl -s http://localhost:8080/healthz)
+          echo "Response: $RESPONSE"
+          chmod +x scripts/healthcheck.sh
+          ./scripts/healthcheck.sh http://localhost:8080/healthz
+
+      - name: Final Validation Summary
+        run: |
+          ALLOC_ID=$(nomad job allocs -json nginx-app | jq -r '.[0].ID')
+          echo "Nomad Allocation ID: $ALLOC_ID"
           nomad alloc status "$ALLOC_ID"
