@@ -12,20 +12,22 @@ job "nginx-app" {
     count = 1
 
     network {
+      mode = "host"
       port "http" {
-        to = 8080
+        static = 8080
       }
     }
 
     service {
-      name = "nginx-app"
-      port = "http"
+      name     = "nginx-app"
+      port     = "http"
+      provider = "nomad"
 
       check {
         name     = "alive"
         type     = "http"
         path     = "/healthz"
-        interval = "10s"
+        interval = "5s"
         timeout  = "2s"
       }
     }
@@ -33,14 +35,14 @@ job "nginx-app" {
     restart {
       attempts = 3
       interval = "2m"
-      delay    = "15s"
+      delay    = "5s"
       mode     = "fail"
     }
 
     update {
       max_parallel     = 1
-      min_healthy_time = "10s"
-      healthy_deadline = "3m"
+      min_healthy_time = "5s"
+      healthy_deadline = "1m"
       auto_revert      = true
     }
 
@@ -48,8 +50,8 @@ job "nginx-app" {
       driver = "docker"
 
       config {
-        image = "ghcr.io/ompatel-2004/devops-intern-final:${var.image_tag}"
-        ports = ["http"]
+        image        = "ghcr.io/ompatel-2004/devops-intern-final:${var.image_tag}"
+        network_mode = "host"
       }
 
       resources {
