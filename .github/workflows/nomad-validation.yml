@@ -15,12 +15,14 @@ permissions:
 jobs:
   nomad:
     name: Validate and Deploy Nomad Job
+
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main'
       )
+
     runs-on: ubuntu-latest
 
     steps:
@@ -173,51 +175,82 @@ jobs:
             echo ""
             echo "===== Attempt ${i}/30 ====="
 
-            nomad job status nginx-app || true
+            JOB_STATUS=$(nomad job status nginx-app -json)
 
-            ALLOC_ID=$(
-              nomad job allocs nginx-app -json 2>/dev/null |
-              jq -r '
-                .[]
-                | select(.ClientStatus == "running")
-                | .ID
-              ' |
-              head -n 1
-            )
+            HEALTHY=$(echo "${JOB_STATUS}" | jq -r '
+              .TaskGroups
+              | to_entries
+              | map(.value.Healthy // 0)
+              | add
+            ')
 
-            if [ -n "${ALLOC_ID}" ]; then
-              echo "Running allocation: ${ALLOC_ID}"
+            UNHEALTHY=$(echo "${JOB_STATUS}" | jq -r '
+              .TaskGroups
+              | to_entries
+              | map(.value.Unhealthy // 0)
+              | add
+            ')
 
-              STATUS=$(nomad alloc status "${ALLOC_ID}" -json)
+            RUNNING=$(echo "${JOB_STATUS}" | jq -r '
+              .TaskGroups
+              | to_entries
+              | map(.value.Running // 0)
+              | add
+            ')
 
-              CLIENT_STATUS=$(echo "${STATUS}" | jq -r '.ClientStatus')
+            echo "Running allocations: ${RUNNING}"
+            echo "Healthy allocations: ${HEALTHY}"
+            echo "Unhealthy allocations: ${UNHEALTHY}"
 
-              HEALTHY=$(
-                echo "${STATUS}" |
+            if [ "${RUNNING}" -ge 1 ] &&
+               [ "${HEALTHY}" -ge 1 ] &&
+               [ "${UNHEALTHY}" -eq 0 ]; then
+
+              echo ""
+              echo "SUCCESS: Nomad allocation is running and healthy."
+
+              echo ""
+              echo "===== ALLOCATION STATUS ====="
+
+              ALLOC_ID=$(
+                nomad job allocs nginx-app -json |
                 jq -r '
-                  [
-                    .TaskStates[].Events[]?.DisplayMessage
-                  ]
-                  | map(select(test("healthy"; "i")))
-                  | length
-                '
+                  .[]
+                  | select(.ClientStatus == "running")
+                  | .ID
+                ' |
+                head -n 1
               )
 
-              echo "Client status: ${CLIENT_STATUS}"
-              echo "Healthy events: ${HEALTHY}"
-
-              if [ "${CLIENT_STATUS}" = "running" ] &&
-                 [ "${HEALTHY}" -gt 0 ]; then
-
-                echo "Nomad allocation is running and healthy."
-                exit 0
+              if [ -n "${ALLOC_ID}" ]; then
+                echo "Allocation ID: ${ALLOC_ID}"
+                nomad alloc status "${ALLOC_ID}"
               fi
+
+              echo ""
+              echo "===== NOMAD SERVICE CHECKS ====="
+
+              if [ -n "${ALLOC_ID}" ]; then
+                nomad alloc checks "${ALLOC_ID}"
+              fi
+
+              exit 0
             fi
 
             sleep 5
           done
 
+          echo ""
           echo "ERROR: Nomad allocation did not become healthy."
+
+          echo ""
+          echo "===== FINAL JOB STATUS ====="
+          nomad job status nginx-app || true
+
+          echo ""
+          echo "===== FINAL ALLOCATIONS ====="
+          nomad job allocs nginx-app || true
+
           exit 1
 
       - name: Check Consul Service
