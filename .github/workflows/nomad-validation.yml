@@ -1,0 +1,154 @@
+name: Nomad Validation
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  nomad:
+    name: Validate and Deploy Nomad Job
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Install Consul
+        env:
+          CONSUL_VERSION: "1.20.3"
+        run: |
+          curl -fsSLo consul.zip \
+            "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip"
+
+          unzip -o consul.zip
+          sudo install consul /usr/local/bin/consul
+
+          consul version
+
+      - name: Install Nomad
+        env:
+          NOMAD_VERSION: "1.9.7"
+        run: |
+          curl -fsSLo nomad.zip \
+            "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
+
+          unzip -o nomad.zip
+          sudo install nomad /usr/local/bin/nomad
+
+          nomad version
+
+      - name: Start Consul
+        run: |
+          consul agent \
+            -dev \
+            -client=0.0.0.0 \
+            > /tmp/consul.log 2>&1 &
+
+          sleep 5
+
+          consul members
+
+      - name: Start Nomad
+        run: |
+          nomad agent \
+            -dev \
+            > /tmp/nomad.log 2>&1 &
+
+          sleep 10
+
+          nomad node status
+
+      - name: Validate Nomad Job
+        run: |
+          nomad job validate nomad/nginx-app.nomad.hcl
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Plan Nomad Job
+        run: |
+          nomad job plan \
+            -var="image_tag=${{ github.event.workflow_run.head_sha || github.sha }}" \
+            nomad/nginx-app.nomad.hcl
+
+      - name: Run Nomad Job
+        run: |
+          nomad job run \
+            -var="image_tag=${{ github.event.workflow_run.head_sha || github.sha }}" \
+            nomad/nginx-app.nomad.hcl
+
+      - name: Wait for Healthy Allocation
+        run: |
+          for i in {1..30}; do
+            echo "===== Attempt ${i}/30 ====="
+
+            nomad job status nginx-app || true
+
+            ALLOC_ID=$(nomad job allocs nginx-app -json 2>/dev/null | \
+              jq -r '.[] | select(.ClientStatus == "running") | .ID' | head -n 1)
+
+            if [ -n "${ALLOC_ID}" ]; then
+              echo "Running allocation: ${ALLOC_ID}"
+
+              STATUS=$(nomad alloc status "${ALLOC_ID}" -json)
+
+              CLIENT_STATUS=$(echo "${STATUS}" | jq -r '.ClientStatus')
+              HEALTHY=$(echo "${STATUS}" | jq -r '
+                [.TaskStates[].Events[]?.DisplayMessage]
+                | map(select(test("healthy"; "i")))
+                | length
+              ')
+
+              echo "Client status: ${CLIENT_STATUS}"
+              echo "Healthy events: ${HEALTHY}"
+
+              if [ "${CLIENT_STATUS}" = "running" ] && [ "${HEALTHY}" -gt 0 ]; then
+                echo "Nomad allocation is running and has reported healthy."
+                exit 0
+              fi
+            fi
+
+            sleep 5
+          done
+
+          echo "ERROR: Nomad allocation did not become healthy."
+          exit 1
+
+      - name: Check Consul Service
+        run: |
+          consul health service nginx-app
+
+      - name: Final Nomad Status
+        if: always()
+        run: |
+          nomad job status nginx-app || true
+          nomad node status || true
+
+      - name: Show Agent Logs
+        if: always()
+        run: |
+          echo "===== CONSUL LOG ====="
+          cat /tmp/consul.log || true
+
+          echo "===== NOMAD LOG ====="
+          cat /tmp/nomad.log || true
