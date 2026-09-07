@@ -1,122 +1,47 @@
-\# DevOps Intern Final Assessment
+# DevOps Intern Final Assessment
 
+[![CI Pipeline](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml)
+[![Validate and Deploy Nomad Job](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/nomad-validation.yml)
+[![Observability Validation](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/observability-validation.yml)
 
+- **Name:** Om Patel
+- **Date:** September 2026
+- **Role:** DevOps Intern
+- **Repository:** https://github.com/ompatel-2004/devops-intern-final
+- **Release:** [`v1.0.0`](https://github.com/ompatel-2004/devops-intern-final/releases/tag/v1.0.0)
+- **Container Registry:** `ghcr.io/ompatel-2004/devops-intern-final:latest`
 
-\[!\[CI Pipeline](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml/badge.svg)](https://github.com/ompatel-2004/devops-intern-final/actions/workflows/ci.yml)
+---
 
+## 1. Architecture Overview
 
+This project implements an end-to-end, reproducible deployment and observability pipeline for an unprivileged Alpine-based NGINX web application.
 
-\- \*\*Name:\*\* Om Patel
-
-\- \*\*Date:\*\* September 2026
-
-\- \*\*Role:\*\* DevOps Intern
-
-\- \*\*Repository:\*\* https://github.com/ompatel-2004/devops-intern-final
-
-
-
-\---
-
-
-
-\## 1. Architecture Overview
-
-
-
-This project implements an end-to-end DevOps pipeline for a containerized NGINX application.
-
-
-
-The application is built from source, validated through GitHub Actions, published to GitHub Container Registry (GHCR), and designed for deployment through HashiCorp Nomad with Consul health checking.
-
-
-
-Application logs are exposed through the container's standard output/error streams and collected by Promtail for Loki-based aggregation and Grafana-based exploration.
-
-
-
-\### End-to-End Flow
-
-
+The application source is version-controlled with conventional commits, tested and packaged via GitHub Actions, published as an immutable container image to GitHub Container Registry (GHCR), orchestrated via HashiCorp Nomad with Consul service checks, and continuously monitored through a Grafana Loki and Promtail log ingestion pipeline.
 
 ```text
-
-Developer
-
-&#x20;   |
-
-&#x20;   v
-
-GitHub Repository
-
-&#x20;   |
-
-&#x20;   v
-
-GitHub Actions
-
-&#x20;   |
-
-&#x20;   +--> ShellCheck / Hadolint
-
-&#x20;   |
-
-&#x20;   +--> Docker Build
-
-&#x20;   |
-
-&#x20;   +--> Application Health Test
-
-&#x20;   |
-
-&#x20;   v
-
-GitHub Container Registry
-
-&#x20;   |
-
-&#x20;   v
-
-HashiCorp Nomad
-
-&#x20;   |
-
-&#x20;   +--> Docker Driver
-
-&#x20;   |
-
-&#x20;   +--> Consul Service Registration
-
-&#x20;   |
-
-&#x20;   +--> /healthz Health Check
-
-&#x20;   |
-
-&#x20;   v
-
-NGINX Application
-
-&#x20;   |
-
-&#x20;   +--> stdout/stderr
-
-&#x20;           |
-
-&#x20;           v
-
-&#x20;        Promtail
-
-&#x20;           |
-
-&#x20;           v
-
-&#x20;          Loki
-
-&#x20;           |
-
-&#x20;           v
-
-&#x20;         Grafana
-
+[ Developer Commit / PR ]
+           │
+           ▼
+┌────────────────────────────────────────────────────────┐
+│               GitHub Actions CI/CD Pipeline            │
+│  1. Lint: ShellCheck (scripts) & Hadolint (Dockerfile) │
+│  2. Build: Inject Commit SHA into static index.html    │
+│  3. Test: Verify /healthz returns HTTP 200             │
+│  4. Publish: Push tagged image to GHCR (main branch)   │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           ▼
+              ┌──────────────────────────┐
+              │ GitHub Packages (GHCR)   │
+              └────────────┬─────────────┘
+                           │
+         ┌─────────────────┴─────────────────┐
+         ▼                                   ▼
+┌───────────────────────────────┐ ┌───────────────────────────────────┐
+│   HashiCorp Nomad & Consul    │ │   Grafana Loki Log Stack          │
+│ • Nomad Job (docker driver)   │ │ • Promtail scrapes stdout/stderr  │
+│ • Dynamic HTTP host port      │ │ • Ships structured logs to Loki   │
+│ • Consul /healthz checks      │ │ • Visualized via Grafana LogQL    │
+│ • Rolling update & auto-revert│ └───────────────────────────────────┘
+└───────────────────────────────┘
