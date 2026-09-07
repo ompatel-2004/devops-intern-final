@@ -29,6 +29,14 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Determine Image Tag
+        id: image
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          echo "Using image tag: ${HEAD_SHA}"
+          echo "tag=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Install Consul
         env:
           CONSUL_VERSION: "1.20.3"
@@ -47,11 +55,10 @@ jobs:
         env:
           NOMAD_VERSION: "1.9.7"
         run: |
-          mkdir -p /tmp/nomad-bin
-
           curl -fsSLo /tmp/nomad.zip \
             "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
 
+          mkdir -p /tmp/nomad-bin
           unzip -o /tmp/nomad.zip -d /tmp/nomad-bin
 
           sudo install /tmp/nomad-bin/nomad /usr/local/bin/nomad
@@ -80,8 +87,12 @@ jobs:
           nomad node status
 
       - name: Validate Nomad Job
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
-          nomad job validate nomad/nginx-app.nomad.hcl
+          nomad job validate \
+            -var="image_tag=${IMAGE_TAG}" \
+            nomad/nginx-app.nomad.hcl
 
       - name: Log in to GHCR
         run: |
@@ -90,14 +101,15 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin
 
-      - name: Determine Image Tag
-        id: image
+      - name: Verify Published Image
         env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
-          IMAGE_TAG="sha-${HEAD_SHA:0:7}"
-          echo "Using published image tag: ${IMAGE_TAG}"
-          echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Pulling:"
+          echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+
+          docker pull \
+            ghcr.io/${{ github.repository }}:${IMAGE_TAG}
 
       - name: Plan Nomad Job
         env:
@@ -160,7 +172,10 @@ jobs:
       - name: Final Nomad Status
         if: always()
         run: |
+          echo "===== NOMAD JOB STATUS ====="
           nomad job status nginx-app || true
+
+          echo "===== NOMAD NODE STATUS ====="
           nomad node status || true
 
       - name: Show Agent Logs
