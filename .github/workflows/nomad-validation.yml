@@ -1,31 +1,67 @@
 name: Validate and Deploy Nomad Job
 
 on:
-  workflow_dispatch:
-  push:
+  workflow_run:
+    workflows:
+      - CI Pipeline
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - "nomad/nginx-app.nomad.hcl"
-      - ".github/workflows/nomad-validation.yml"
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Published GHCR image SHA to validate"
+        required: true
+        type: string
 
 permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: nomad-validation-main
+  cancel-in-progress: true
+
 env:
   NOMAD_VERSION: "1.11.3"
   CONSUL_VERSION: "1.20.2"
-  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   nomad:
     name: Validate and Deploy Nomad Job
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Determine Image Tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            IMAGE_TAG="${{ github.event.workflow_run.head_sha }}"
+          else
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          fi
+
+          if [ -z "${IMAGE_TAG}" ]; then
+            echo "ERROR: Image tag is empty."
+            exit 1
+          fi
+
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+
+          echo "Using image tag:"
+          echo "${IMAGE_TAG}"
 
       - name: Install Nomad
         run: |
@@ -65,11 +101,13 @@ jobs:
             > /tmp/consul.log 2>&1 &
 
           for i in {1..60}; do
-            LEADER=$(curl -fsS \
-              http://127.0.0.1:8500/v1/status/leader \
-              2>/dev/null || true)
+            LEADER=$(
+              curl -fsS \
+                http://127.0.0.1:8500/v1/status/leader \
+                2>/dev/null || true
+            )
 
-            echo "Consul leader response: ${LEADER}"
+            echo "Consul leader: ${LEADER}"
 
             if [ -n "${LEADER}" ] && [ "${LEADER}" != "\"\"" ]; then
               echo "Consul is ready."
@@ -99,11 +137,13 @@ jobs:
             > /tmp/nomad.log 2>&1 &
 
           for i in {1..60}; do
-            LEADER=$(curl -fsS \
-              http://127.0.0.1:4646/v1/status/leader \
-              2>/dev/null || true)
+            LEADER=$(
+              curl -fsS \
+                http://127.0.0.1:4646/v1/status/leader \
+                2>/dev/null || true
+            )
 
-            echo "Nomad leader response: ${LEADER}"
+            echo "Nomad leader: ${LEADER}"
 
             if [ -n "${LEADER}" ] && [ "${LEADER}" != "\"\"" ]; then
               echo "Nomad server is ready."
@@ -124,29 +164,29 @@ jobs:
           for i in {1..60}; do
             echo "===== Nomad node check ${i}/60 ====="
 
-            NODES_JSON=$(nomad node status -json 2>/dev/null || true)
+            NODES_JSON=$(
+              curl -fsS \
+                http://127.0.0.1:4646/v1/nodes \
+                2>/dev/null || true
+            )
 
-            if [ -n "${NODES_JSON}" ]; then
-              echo "${NODES_JSON}" | jq .
-            fi
+            echo "${NODES_JSON}" | jq . || true
 
             READY_NODES=$(
               echo "${NODES_JSON}" |
-              jq -r '
-                if type == "array"
-                then
-                  [
-                    .[] |
-                    select(.Status == "ready")
-                  ] |
-                  length
-                else
-                  if .Status == "ready" then 1 else 0 end
-                end
+              jq '
+                [
+                  .[] |
+                  select(
+                    .Status == "ready" and
+                    .SchedulingEligibility == "eligible"
+                  )
+                ] |
+                length
               ' 2>/dev/null || echo "0"
             )
 
-            echo "Ready Nomad nodes: ${READY_NODES}"
+            echo "Ready eligible nodes: ${READY_NODES}"
 
             if [ "${READY_NODES}" -ge 1 ]; then
               echo "Nomad client node is ready."
@@ -154,9 +194,9 @@ jobs:
             fi
 
             if [ "${i}" -eq 60 ]; then
-              echo "ERROR: No ready Nomad client node was registered."
-              nomad node status || true
-              cat /tmp/nomad.log || true
+              echo "ERROR: No ready eligible Nomad client node found."
+              echo "${NODES_JSON}" | jq . || true
+              cat /tmp/nomad.log
               exit 1
             fi
 
@@ -178,17 +218,22 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin
 
-      - name: Pull Published Image
+      - name: Verify Published Image
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
 
-          echo "Pulling image:"
+          echo "Verifying published image:"
           echo "${IMAGE}"
 
           docker pull "${IMAGE}"
 
           docker image inspect "${IMAGE}" \
             --format 'Image ID: {{.Id}}'
+
+          docker image inspect "${IMAGE}" \
+            --format 'Image size: {{.Size}} bytes'
+
+          echo "Published image is available."
 
       - name: Validate Nomad Job
         run: |
@@ -225,35 +270,32 @@ jobs:
 
       - name: Verify Nomad Deployment
         run: |
-          for i in {1..60}; do
-            echo "===== Deployment check ${i}/60 ====="
+          for i in {1..30}; do
+            echo "===== Deployment check ${i}/30 ====="
 
             DEPLOYMENT_JSON=$(
-              nomad job deployments \
-                -json \
-                -latest \
-                nginx-app \
+              curl -fsS \
+                http://127.0.0.1:4646/v1/job/nginx-app/deployment \
                 2>/dev/null || true
             )
 
-            if [ -n "${DEPLOYMENT_JSON}" ]; then
-              echo "${DEPLOYMENT_JSON}" | jq .
-            fi
+            echo "${DEPLOYMENT_JSON}" | jq . || true
 
             DEPLOYMENT_STATUS=$(
               echo "${DEPLOYMENT_JSON}" |
-              jq -r '
-                if type == "array"
-                then .[0].Status
-                else .Status
-                end
-              ' 2>/dev/null || echo ""
+              jq -r '.Status // empty' 2>/dev/null || true
+            )
+
+            DEPLOYMENT_DESCRIPTION=$(
+              echo "${DEPLOYMENT_JSON}" |
+              jq -r '.StatusDescription // empty' 2>/dev/null || true
             )
 
             echo "Deployment status: ${DEPLOYMENT_STATUS}"
+            echo "Deployment description: ${DEPLOYMENT_DESCRIPTION}"
 
             if [ "${DEPLOYMENT_STATUS}" = "successful" ]; then
-              echo "Nomad deployment completed successfully."
+              echo "Nomad deployment is successful."
               break
             fi
 
@@ -263,7 +305,7 @@ jobs:
               exit 1
             fi
 
-            if [ "${i}" -eq 60 ]; then
+            if [ "${i}" -eq 30 ]; then
               echo "ERROR: Nomad deployment did not become successful."
               nomad job status nginx-app || true
               exit 1
@@ -275,22 +317,15 @@ jobs:
       - name: Verify Allocation Health
         run: |
           for i in {1..60}; do
-            echo "===== Allocation health check ${i}/60 ====="
+            echo "===== Allocation health ${i}/60 ====="
 
             ALLOCATIONS_JSON=$(
-              nomad job allocs \
-                -json \
-                nginx-app \
+              curl -fsS \
+                http://127.0.0.1:4646/v1/job/nginx-app/allocations \
                 2>/dev/null || true
             )
 
-            if [ -z "${ALLOCATIONS_JSON}" ]; then
-              echo "No allocation data available yet."
-              sleep 2
-              continue
-            fi
-
-            echo "${ALLOCATIONS_JSON}" | jq .
+            echo "${ALLOCATIONS_JSON}" | jq . || true
 
             ALLOCATION=$(
               echo "${ALLOCATIONS_JSON}" |
@@ -304,11 +339,11 @@ jobs:
                 ] |
                 sort_by(.CreateTime) |
                 last
-              '
+              ' 2>/dev/null || echo "null"
             )
 
-            if [ -z "${ALLOCATION}" ] ||
-               [ "${ALLOCATION}" = "null" ]; then
+            if [ "${ALLOCATION}" = "null" ] ||
+               [ -z "${ALLOCATION}" ]; then
               echo "No running allocation found yet."
               sleep 2
               continue
@@ -316,29 +351,50 @@ jobs:
 
             ALLOC_ID=$(echo "${ALLOCATION}" | jq -r '.ID')
 
-            CLIENT_STATUS=$(echo "${ALLOCATION}" | jq -r '.ClientStatus')
+            CLIENT_STATUS=$(
+              echo "${ALLOCATION}" |
+              jq -r '.ClientStatus'
+            )
 
-            DESIRED_STATUS=$(echo "${ALLOCATION}" | jq -r '.DesiredStatus')
+            DESIRED_STATUS=$(
+              echo "${ALLOCATION}" |
+              jq -r '.DesiredStatus'
+            )
 
             HEALTHY=$(
               echo "${ALLOCATION}" |
               jq -r '.DeploymentStatus.Healthy // false'
             )
 
+            TASK_RUNNING=$(
+              echo "${ALLOCATION}" |
+              jq '
+                [
+                  .TaskStates // {} |
+                  to_entries[] |
+                  select(.value.State == "running")
+                ] |
+                length
+              '
+            )
+
             echo "Allocation ID: ${ALLOC_ID}"
             echo "Client Status: ${CLIENT_STATUS}"
             echo "Desired Status: ${DESIRED_STATUS}"
             echo "Deployment Healthy: ${HEALTHY}"
+            echo "Running Tasks: ${TASK_RUNNING}"
 
             if [ "${CLIENT_STATUS}" = "running" ] &&
                [ "${DESIRED_STATUS}" = "run" ] &&
-               [ "${HEALTHY}" = "true" ]; then
+               [ "${HEALTHY}" = "true" ] &&
+               [ "${TASK_RUNNING}" -ge 1 ]; then
               echo "Nomad allocation is healthy."
+              echo "${ALLOC_ID}" > /tmp/alloc_id
               break
             fi
 
             if [ "${i}" -eq 60 ]; then
-              echo "ERROR: Nomad allocation did not become healthy."
+              echo "ERROR: Allocation did not become healthy."
               nomad alloc status "${ALLOC_ID}" || true
               exit 1
             fi
@@ -348,33 +404,7 @@ jobs:
 
       - name: Verify Nomad HTTP Health Check
         run: |
-          ALLOCATIONS_JSON=$(
-            nomad job allocs \
-              -json \
-              nginx-app
-          )
-
-          ALLOC_ID=$(
-            echo "${ALLOCATIONS_JSON}" |
-            jq -r '
-              [
-                .[] |
-                select(
-                  .DesiredStatus == "run" and
-                  .ClientStatus == "running"
-                )
-              ] |
-              sort_by(.CreateTime) |
-              last |
-              .ID
-            '
-          )
-
-          if [ -z "${ALLOC_ID}" ] ||
-             [ "${ALLOC_ID}" = "null" ]; then
-            echo "ERROR: No running allocation found."
-            exit 1
-          fi
+          ALLOC_ID=$(cat /tmp/alloc_id)
 
           echo "Allocation ID: ${ALLOC_ID}"
 
@@ -382,42 +412,36 @@ jobs:
             echo "===== Nomad HTTP check ${i}/30 ====="
 
             CHECKS_JSON=$(
-              nomad alloc checks \
-                -json \
-                "${ALLOC_ID}" \
+              curl -fsS \
+                "http://127.0.0.1:4646/v1/allocation/${ALLOC_ID}/checks" \
                 2>/dev/null || true
             )
 
-            if [ -n "${CHECKS_JSON}" ]; then
-              echo "${CHECKS_JSON}" | jq .
-            fi
+            echo "${CHECKS_JSON}" | jq . || true
 
-            SUCCESSFUL_CHECKS=$(
+            ALIVE_STATUS=$(
               echo "${CHECKS_JSON}" |
-              jq '
-                if type == "array"
-                then
-                  [
-                    .[] |
-                    select(.Status == "success")
-                  ] |
-                  length
-                else
-                  0
-                end
-              ' 2>/dev/null || echo "0"
+              jq -r '
+                [
+                  to_entries[] |
+                  .value |
+                  select(.Check == "alive") |
+                  .Status
+                ] |
+                first // ""
+              ' 2>/dev/null || true
             )
 
-            echo "Successful checks: ${SUCCESSFUL_CHECKS}"
+            echo "Nomad alive check status: ${ALIVE_STATUS}"
 
-            if [ "${SUCCESSFUL_CHECKS}" -ge 1 ]; then
+            if [ "${ALIVE_STATUS}" = "success" ]; then
               echo "Nomad HTTP health check is passing."
               break
             fi
 
             if [ "${i}" -eq 30 ]; then
               echo "ERROR: Nomad HTTP health check did not pass."
-              nomad alloc checks "${ALLOC_ID}" || true
+              echo "${CHECKS_JSON}" | jq . || true
               exit 1
             fi
 
@@ -435,9 +459,7 @@ jobs:
                 2>/dev/null || true
             )
 
-            if [ -n "${SERVICE_OUTPUT}" ]; then
-              echo "${SERVICE_OUTPUT}" | jq .
-            fi
+            echo "${SERVICE_OUTPUT}" | jq . || true
 
             PASSING=$(
               echo "${SERVICE_OUTPUT}" |
@@ -463,16 +485,14 @@ jobs:
 
             if [ "${i}" -eq 30 ]; then
               echo "ERROR: Consul service health check failed."
-              curl -fsS \
-                http://127.0.0.1:8500/v1/health/service/nginx-app |
-                jq . || true
+              echo "${SERVICE_OUTPUT}" | jq . || true
               exit 1
             fi
 
             sleep 2
           done
 
-      - name: Verify Application Through Consul
+      - name: Verify Application HTTP Health
         run: |
           SERVICE_OUTPUT=$(
             curl -fsS \
@@ -496,7 +516,7 @@ jobs:
 
           if [ -z "${SERVICE_PORT}" ] ||
              [ "${SERVICE_PORT}" = "null" ]; then
-            echo "ERROR: Consul did not return a service port."
+            echo "ERROR: Consul did not provide a service port."
             exit 1
           fi
 
@@ -518,21 +538,22 @@ jobs:
 
             if [ "${HTTP_STATUS}" = "200" ]; then
               echo "Application HTTP health check passed."
-              exit 0
+              break
+            fi
+
+            if [ "${i}" -eq 30 ]; then
+              echo "ERROR: Application did not return HTTP 200."
+              exit 1
             fi
 
             sleep 2
           done
 
-          echo "ERROR: Application did not return HTTP 200."
-          exit 1
-
       - name: Verify Nomad Job Status
         run: |
           JOB_JSON=$(
-            nomad job status \
-              -json \
-              nginx-app
+            curl -fsS \
+              http://127.0.0.1:4646/v1/job/nginx-app
           )
 
           echo "${JOB_JSON}" | jq .
@@ -557,26 +578,26 @@ jobs:
           echo "       NOMAD VALIDATION SUCCESSFUL"
           echo "=========================================="
 
-          echo "Nomad:"
+          echo "Image:"
+          echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+
+          echo ""
+          echo "Nomad version:"
           nomad version
 
           echo ""
-          echo "Job:"
+          echo "Nomad job:"
           nomad job status nginx-app
 
           echo ""
-          echo "Allocations:"
+          echo "Nomad allocations:"
           nomad job allocs nginx-app
 
           echo ""
-          echo "Consul:"
+          echo "Consul service:"
           curl -fsS \
             http://127.0.0.1:8500/v1/health/service/nginx-app |
             jq .
-
-          echo ""
-          echo "Image:"
-          echo "ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
 
           echo ""
           echo "All validation checks passed."
