@@ -175,27 +175,31 @@ jobs:
             echo ""
             echo "===== Attempt ${i}/30 ====="
 
-            JOB_STATUS=$(nomad job status nginx-app -json)
+            if ! JOB_STATUS=$(nomad job status -json nginx-app); then
+              echo "Nomad job status is not available yet."
+              sleep 5
+              continue
+            fi
 
             HEALTHY=$(echo "${JOB_STATUS}" | jq -r '
               .TaskGroups
               | to_entries
               | map(.value.Healthy // 0)
-              | add
+              | add // 0
             ')
 
             UNHEALTHY=$(echo "${JOB_STATUS}" | jq -r '
               .TaskGroups
               | to_entries
               | map(.value.Unhealthy // 0)
-              | add
+              | add // 0
             ')
 
             RUNNING=$(echo "${JOB_STATUS}" | jq -r '
               .TaskGroups
               | to_entries
               | map(.value.Running // 0)
-              | add
+              | add // 0
             ')
 
             echo "Running allocations: ${RUNNING}"
@@ -210,10 +214,14 @@ jobs:
               echo "SUCCESS: Nomad allocation is running and healthy."
 
               echo ""
-              echo "===== ALLOCATION STATUS ====="
+              echo "===== NOMAD JOB STATUS ====="
+              nomad job status nginx-app
+
+              echo ""
+              echo "===== RUNNING ALLOCATION ====="
 
               ALLOC_ID=$(
-                nomad job allocs nginx-app -json |
+                nomad job allocs -json nginx-app |
                 jq -r '
                   .[]
                   | select(.ClientStatus == "running")
@@ -224,14 +232,17 @@ jobs:
 
               if [ -n "${ALLOC_ID}" ]; then
                 echo "Allocation ID: ${ALLOC_ID}"
+
+                echo ""
+                echo "===== ALLOCATION STATUS ====="
                 nomad alloc status "${ALLOC_ID}"
-              fi
 
-              echo ""
-              echo "===== NOMAD SERVICE CHECKS ====="
-
-              if [ -n "${ALLOC_ID}" ]; then
+                echo ""
+                echo "===== NOMAD SERVICE CHECKS ====="
                 nomad alloc checks "${ALLOC_ID}"
+              else
+                echo "ERROR: Could not determine the running allocation ID."
+                exit 1
               fi
 
               exit 0
@@ -244,11 +255,11 @@ jobs:
           echo "ERROR: Nomad allocation did not become healthy."
 
           echo ""
-          echo "===== FINAL JOB STATUS ====="
+          echo "===== FINAL NOMAD JOB STATUS ====="
           nomad job status nginx-app || true
 
           echo ""
-          echo "===== FINAL ALLOCATIONS ====="
+          echo "===== FINAL NOMAD ALLOCATIONS ====="
           nomad job allocs nginx-app || true
 
           exit 1
