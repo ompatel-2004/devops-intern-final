@@ -10,9 +10,10 @@ job "nginx-app" {
 
   update {
     max_parallel     = 1
-    min_healthy_time = "5s"
+    min_healthy_time = "10s"
     healthy_deadline = "2m"
     auto_revert      = true
+    canary           = 0
   }
 
   group "nginx" {
@@ -20,7 +21,7 @@ job "nginx-app" {
 
     restart {
       attempts = 3
-      interval = "10m"
+      interval = "30m"
       delay    = "15s"
       mode     = "fail"
     }
