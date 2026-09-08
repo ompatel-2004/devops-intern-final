@@ -1,20 +1,39 @@
-# IDE and editor files
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDE/editor files
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Build and runtime artifacts
-*.log
-tmp/
-.terraform/
-*.tfstate*
-
-# Environment and secrets
+# Local environment files
 .env
-*.pem
-*.key
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Docker artifacts
+*.tar
+*.tar.gz
+
+# Terraform local state, if used later
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Test/cache directories
+.pytest_cache/
+__pycache__/
+
+# Local Nomad/Consul data
+.nomad/
+.consul/
