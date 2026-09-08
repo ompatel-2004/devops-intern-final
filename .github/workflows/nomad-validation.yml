@@ -7,12 +7,14 @@ on:
     paths:
       - "nomad/**"
       - ".github/workflows/nomad-validation.yml"
+
   pull_request:
     branches:
       - main
     paths:
       - "nomad/**"
       - ".github/workflows/nomad-validation.yml"
+
   workflow_dispatch:
 
 permissions:
@@ -27,8 +29,8 @@ jobs:
     env:
       NOMAD_VERSION: "1.7.7"
       CONSUL_VERSION: "1.17.2"
-      IMAGE_TAG: "latest"
       IMAGE_NAME: ghcr.io/${{ github.repository }}
+      IMAGE_TAG: ${{ github.sha }}
 
     steps:
       - name: Checkout repository
@@ -49,24 +51,25 @@ jobs:
             -o "$TMP_DIR/nomad.zip" \
             "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${ARCH}.zip"
 
-          mkdir -p "$TMP_DIR/nomad"
-          unzip -q "$TMP_DIR/nomad.zip" -d "$TMP_DIR/nomad"
+          mkdir -p "$TMP_DIR/nomad-bin"
+          unzip -q "$TMP_DIR/nomad.zip" -d "$TMP_DIR/nomad-bin"
 
           sudo install -m 0755 \
-            "$TMP_DIR/nomad/nomad" \
+            "$TMP_DIR/nomad-bin/nomad" \
             /usr/local/bin/nomad
 
           curl -fsSL \
             -o "$TMP_DIR/consul.zip" \
             "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_${ARCH}.zip"
 
-          mkdir -p "$TMP_DIR/consul"
-          unzip -q "$TMP_DIR/consul.zip" -d "$TMP_DIR/consul"
+          mkdir -p "$TMP_DIR/consul-bin"
+          unzip -q "$TMP_DIR/consul.zip" -d "$TMP_DIR/consul-bin"
 
           sudo install -m 0755 \
-            "$TMP_DIR/consul/consul" \
+            "$TMP_DIR/consul-bin/consul" \
             /usr/local/bin/consul
 
+          echo "Installed versions:"
           nomad version
           consul version
           jq --version
@@ -93,7 +96,9 @@ jobs:
             > /tmp/consul.log 2>&1 &
 
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8500/v1/status/leader | grep -q '"'; then
+            if curl -fsS \
+              http://127.0.0.1:8500/v1/status/leader \
+              | grep -q '"'; then
               echo "Consul is ready."
               break
             fi
@@ -141,7 +146,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          NODE_ID="$(nomad node status -self -json | jq -r '.ID')"
+          NODE_ID="$(
+            nomad node status -self -json \
+              | jq -r '.ID'
+          )"
 
           if [ -z "$NODE_ID" ] || [ "$NODE_ID" = "null" ]; then
             echo "Nomad node ID was not found."
@@ -152,12 +160,31 @@ jobs:
           echo "Nomad node ID: ${NODE_ID}"
 
           for i in $(seq 1 15); do
-            DOCKER_DETECTED="$(nomad node status -self -json | jq -r '.Drivers.docker.Detected // false')"
-            DOCKER_HEALTHY="$(nomad node status -self -json | jq -r '.Drivers.docker.Healthy // false')"
-            if [ "$DOCKER_DETECTED" = "true" ] && [ "$DOCKER_HEALTHY" = "true" ]; then
+            DOCKER_DETECTED="$(
+              nomad node status -self -json \
+                | jq -r '.Drivers.docker.Detected // false'
+            )"
+
+            DOCKER_HEALTHY="$(
+              nomad node status -self -json \
+                | jq -r '.Drivers.docker.Healthy // false'
+            )"
+
+            echo "Docker detected: ${DOCKER_DETECTED}"
+            echo "Docker healthy: ${DOCKER_HEALTHY}"
+
+            if [ "$DOCKER_DETECTED" = "true" ] \
+              && [ "$DOCKER_HEALTHY" = "true" ]; then
               echo "Docker driver is detected and healthy."
               break
             fi
+
+            if [ "$i" -eq 15 ]; then
+              echo "ERROR: Docker driver was not detected as healthy."
+              nomad node status -self
+              exit 1
+            fi
+
             echo "Waiting for Docker driver detection ($i/15)..."
             sleep 2
           done
@@ -172,38 +199,88 @@ jobs:
 
       - name: Plan Nomad job
         run: |
+          set -uo pipefail
+
           PLAN_FILE="$(mktemp)"
-          PLAN_EXIT_CODE=0
+
           nomad job plan \
             -no-color \
             -var="image_tag=${IMAGE_TAG}" \
-            nomad/nginx-app.nomad.hcl > "$PLAN_FILE" 2>&1 || PLAN_EXIT_CODE=$?
+            nomad/nginx-app.nomad.hcl \
+            > "$PLAN_FILE" 2>&1
+
+          PLAN_EXIT_CODE=$?
 
           cat "$PLAN_FILE"
 
-          if [ "$PLAN_EXIT_CODE" -eq 0 ] || [ "$PLAN_EXIT_CODE" -eq 1 ]; then
-            echo "Nomad plan executed successfully."
-          else
-            echo "ERROR: Nomad plan failed with unexpected error code: ${PLAN_EXIT_CODE}."
+          if [ "$PLAN_EXIT_CODE" -eq 0 ]; then
+            echo "Nomad plan completed with no allocation changes."
+            exit 0
+          fi
+
+          if [ "$PLAN_EXIT_CODE" -eq 1 ]; then
+            if grep -q "All tasks successfully allocated." "$PLAN_FILE"; then
+              echo "Nomad plan completed successfully with allocation changes."
+              exit 0
+            fi
+
+            echo "ERROR: Nomad plan reported allocation placement problems."
             exit 1
           fi
+
+          echo "ERROR: Nomad plan failed with exit code ${PLAN_EXIT_CODE}."
+          exit 1
 
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Pull application image
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Wait for immutable application image
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+
+          IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Waiting for published image:"
+          echo "${IMAGE}"
+
+          for i in $(seq 1 60); do
+            if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "Image is available in GHCR."
+              exit 0
+            fi
+
+            echo "Image not available yet ($i/60)."
+            sleep 10
+          done
+
+          echo "ERROR: Timed out waiting for ${IMAGE}"
+          exit 1
+
+      - name: Pull immutable application image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+
           docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Pulled:"
+          docker image inspect \
+            "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --format '{{.RepoTags}}'
 
       - name: Run Nomad job
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+
           nomad job run -detach \
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
@@ -212,13 +289,27 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+
           echo "Waiting for task allocation to enter running status..."
+
           for i in $(seq 1 40); do
-            RUNNING=$(nomad job status nginx-app | awk '/running/ {print $1}' | head -n 1)
+            RUNNING="$(
+              nomad job status nginx-app \
+                | awk '/running/ {print $1}' \
+                | head -n 1
+            )"
+
             if [ -n "$RUNNING" ]; then
               echo "Allocation is running!"
               break
             fi
+
+            if [ "$i" -eq 40 ]; then
+              echo "ERROR: Allocation did not reach running state."
+              nomad job status nginx-app
+              exit 1
+            fi
+
             echo "Waiting for allocation ($i/40)..."
             sleep 3
           done
@@ -229,55 +320,155 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          ALLOC_ID="$(nomad job allocs -json nginx-app | jq -r 'map(select(.ClientStatus == "running")) | last | .ID // empty')"
+
+          ALLOC_ID="$(
+            nomad job allocs -json nginx-app \
+              | jq -r '
+                  map(select(.ClientStatus == "running"))
+                  | last
+                  | .ID // empty
+                '
+          )"
+
           if [ -z "$ALLOC_ID" ]; then
-            ALLOC_ID="$(nomad job allocs -json nginx-app | jq -r '.[0].ID')"
+            ALLOC_ID="$(
+              nomad job allocs -json nginx-app \
+                | jq -r '.[0].ID'
+            )"
+          fi
+
+          if [ -z "$ALLOC_ID" ] || [ "$ALLOC_ID" = "null" ]; then
+            echo "ERROR: Nomad allocation ID was not found."
+            nomad job status nginx-app
+            exit 1
           fi
 
           echo "Nomad Allocation ID: ${ALLOC_ID}"
+
           nomad alloc status "$ALLOC_ID"
 
       - name: Verify Consul service registration
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+
           for i in $(seq 1 30); do
-            if consul catalog services | grep -q "nginx-app"; then
+            if consul catalog services \
+              | grep -q "^nginx-app$"; then
               echo "Consul service registered."
               break
             fi
+
+            if [ "$i" -eq 30 ]; then
+              echo "ERROR: nginx-app was not registered in Consul."
+              consul catalog services
+              exit 1
+            fi
+
+            echo "Waiting for Consul service registration ($i/30)..."
             sleep 2
           done
 
           echo "Catalog services:"
           consul catalog services
 
+          echo
           echo "Checking service health via Consul API:"
-          curl -s http://127.0.0.1:8500/v1/health/service/nginx-app | jq .
 
-      - name: Verify dynamic HTTP port & application health
+          SERVICE_HEALTH="$(
+            curl -fsS \
+              http://127.0.0.1:8500/v1/health/service/nginx-app
+          )"
+
+          echo "$SERVICE_HEALTH" | jq .
+
+          echo "$SERVICE_HEALTH" \
+            | jq -e '
+                length > 0
+                and all(.[]; any(.Checks[]; .Status == "passing"))
+              ' >/dev/null
+
+          echo "Consul reports nginx-app as healthy."
+
+      - name: Verify dynamic HTTP port and application health
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          ALLOC_ID="$(nomad job allocs -json nginx-app | jq -r 'map(select(.ClientStatus == "running")) | last | .ID // empty')"
+
+          ALLOC_ID="$(
+            nomad job allocs -json nginx-app \
+              | jq -r '
+                  map(select(.ClientStatus == "running"))
+                  | last
+                  | .ID // empty
+                '
+          )"
+
           if [ -z "$ALLOC_ID" ]; then
-            ALLOC_ID="$(nomad job allocs -json nginx-app | jq -r '.[0].ID')"
+            ALLOC_ID="$(
+              nomad job allocs -json nginx-app \
+                | jq -r '.[0].ID'
+            )"
           fi
 
-          HOST_PORT="$(nomad alloc status -json "$ALLOC_ID" | jq -r '.AllocatedResources.Shared.Networks[0].DynamicPorts[] | select(.Label == "http") | .Value')"
+          HOST_PORT="$(
+            nomad alloc status -json "$ALLOC_ID" \
+              | jq -r '
+                  .AllocatedResources.Shared.Networks[0]
+                  .DynamicPorts[]
+                  | select(.Label == "http")
+                  | .Value
+                '
+          )"
 
           if [ -z "$HOST_PORT" ] || [ "$HOST_PORT" = "null" ]; then
             echo "ERROR: Dynamic HTTP port not found."
+            nomad alloc status "$ALLOC_ID"
             exit 1
           fi
 
           echo "Dynamically mapped host port: ${HOST_PORT}"
 
-          timeout 30s sh -c "until curl -s -f http://127.0.0.1:${HOST_PORT}/healthz; do sleep 2; done"
-          curl -i "http://127.0.0.1:${HOST_PORT}/healthz"
+          timeout 30s sh -c \
+            "until curl -s -f http://127.0.0.1:${HOST_PORT}/healthz; do sleep 2; done"
 
+          echo
+          echo "HTTP health response:"
+          curl -i \
+            "http://127.0.0.1:${HOST_PORT}/healthz"
+
+          echo
+          echo "Application healthcheck script:"
           chmod +x scripts/healthcheck.sh
-          ./scripts/healthcheck.sh "http://127.0.0.1:${HOST_PORT}/healthz"
+
+          ./scripts/healthcheck.sh \
+            "http://127.0.0.1:${HOST_PORT}/healthz"
+
+      - name: Verify deployed image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+
+          ALLOC_ID="$(
+            nomad job allocs -json nginx-app \
+              | jq -r '
+                  map(select(.ClientStatus == "running"))
+                  | last
+                  | .ID // empty
+                '
+          )"
+
+          if [ -z "$ALLOC_ID" ]; then
+            echo "ERROR: Running allocation not found."
+            exit 1
+          fi
+
+          echo "Expected image:"
+          echo "${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo
+          echo "Allocation status:"
+          nomad alloc status "$ALLOC_ID"
 
       - name: Show agent logs on failure
         if: failure()
@@ -290,5 +481,13 @@ jobs:
           cat /tmp/nomad.log || true
 
           echo
+          echo "===== NOMAD JOB STATUS ====="
+          nomad job status nginx-app || true
+
+          echo
           echo "===== DOCKER INFO ====="
           docker info || true
+
+          echo
+          echo "===== DOCKER IMAGES ====="
+          docker images || true
