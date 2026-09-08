@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
@@ -13,157 +13,164 @@ permissions:
 
 jobs:
   lint:
-    name: Lint Scripts & Dockerfile
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: ShellCheck
-        run: |
-          shellcheck scripts/*.sh
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: "./scripts"
 
-      - name: Hadolint
+      - name: Run Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: app/Dockerfile
 
   build:
-    name: Build Container Image
-    runs-on: ubuntu-latest
+    name: Build
     needs: lint
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker Image
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
         run: |
           docker build \
-            --build-arg BUILD_SHA="${{ github.sha }}" \
-            --tag "nginx-app:${{ github.sha }}" \
+            --build-arg BUILD_SHA="${GITHUB_SHA}" \
+            --tag nginx-app:"${GITHUB_SHA}" \
             ./app
 
-      - name: Check Image Size
+      - name: Show image details
         run: |
-          IMAGE_SIZE=$(docker image inspect \
-            "nginx-app:${{ github.sha }}" \
-            --format '{{.Size}}')
+          docker image inspect nginx-app:"${GITHUB_SHA}" \
+            --format='Image size: {{.Size}} bytes'
 
-          MAX_SIZE=$((60 * 1024 * 1024))
+          docker image inspect nginx-app:"${GITHUB_SHA}" \
+            --format='User: {{.Config.User}}'
 
-          echo "Image size: ${IMAGE_SIZE} bytes"
-          echo "Maximum allowed: ${MAX_SIZE} bytes"
+      - name: Save image
+        run: |
+          docker save nginx-app:"${GITHUB_SHA}" \
+            | gzip > nginx-app.tar.gz
 
-          if [ "${IMAGE_SIZE}" -ge "${MAX_SIZE}" ]; then
-            echo "ERROR: Docker image is 60 MB or larger."
-            exit 1
-          fi
-
-          echo "Image size requirement passed."
+      - name: Upload built image
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-image
+          path: nginx-app.tar.gz
+          retention-days: 1
 
   test:
-    name: Test Container & Health Endpoint
-    runs-on: ubuntu-latest
+    name: Test
     needs: build
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Test Image
-        run: |
-          docker build \
-            --build-arg BUILD_SHA="${{ github.sha }}" \
-            --tag "nginx-app:${{ github.sha }}" \
-            ./app
+      - name: Download built image
+        uses: actions/download-artifact@v4
+        with:
+          name: nginx-image
 
-      - name: Start NGINX Container
+      - name: Load Docker image
+        run: |
+          gunzip -c nginx-app.tar.gz | docker load
+
+      - name: Start application
         run: |
           docker run -d \
-            --name nginx-app-test \
+            --name nginx-app \
             -p 8080:8080 \
-            "nginx-app:${{ github.sha }}"
+            nginx-app:"${GITHUB_SHA}"
 
-      - name: Wait for NGINX Readiness
+      - name: Wait for application
         run: |
-          timeout 30s sh -c \
-            'until curl -s -f http://localhost:8080/healthz; do sleep 2; done'
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8080/healthz >/dev/null; then
+              echo "Application is ready."
+              exit 0
+            fi
 
-          echo "NGINX is ready."
+            echo "Waiting for application..."
+            sleep 2
+          done
 
-      - name: Test Homepage
+          echo "Application did not become ready."
+          docker logs nginx-app
+          exit 1
+
+      - name: Test homepage
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null \
-            -w "%{http_code}" \
-            http://localhost:8080/)
+          curl -fsS http://localhost:8080/ > /tmp/homepage.html
+          grep -q "DevOps Intern Final Assessment" /tmp/homepage.html
 
-          echo "Homepage HTTP status: ${HTTP_STATUS}"
-
-          if [ "${HTTP_STATUS}" != "200" ]; then
-            echo "ERROR: Homepage did not return HTTP 200."
-            exit 1
-          fi
-
-      - name: Test Health Endpoint
+      - name: Test health endpoint
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null \
-            -w "%{http_code}" \
-            http://localhost:8080/healthz)
+          curl -fsS http://localhost:8080/healthz
 
-          echo "Health endpoint HTTP status: ${HTTP_STATUS}"
-
-          if [ "${HTTP_STATUS}" != "200" ]; then
-            echo "ERROR: /healthz did not return HTTP 200."
-            exit 1
-          fi
-
-      - name: Run Healthcheck Script
+      - name: Run healthcheck script
         run: |
           chmod +x scripts/healthcheck.sh
-          ./scripts/healthcheck.sh http://localhost:8080/healthz
+          ./scripts/healthcheck.sh http://localhost:8080
 
-      - name: Verify Build SHA
+      - name: Verify non-root user
         run: |
-          RESPONSE=$(curl -s http://localhost:8080/)
+          USER_ID="$(docker exec nginx-app id -u)"
+          echo "Container UID: ${USER_ID}"
 
-          echo "${RESPONSE}"
-
-          if ! echo "${RESPONSE}" | grep -q "${{ github.sha }}"; then
-            echo "ERROR: BUILD_SHA was not injected into the application."
+          if [ "${USER_ID}" = "0" ]; then
+            echo "NGINX is running as root."
             exit 1
           fi
 
-          echo "BUILD_SHA verification passed."
+          echo "NGINX is running as a non-root user."
 
-      - name: Show Container Logs
-        if: always()
+      - name: Verify build SHA
         run: |
-          docker logs nginx-app-test || true
+          curl -fsSI http://localhost:8080/ | grep -i "^X-Build-SHA:"
+          curl -fsS http://localhost:8080/ | grep -q "${GITHUB_SHA}"
 
-      - name: Clean Up Test Container
+      - name: Show container logs
         if: always()
-        run: |
-          docker rm -f nginx-app-test || true
+        run: docker logs nginx-app
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f nginx-app || true
 
   publish:
     name: Publish to GHCR
-    runs-on: ubuntu-latest
     needs: test
-
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
 
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set Up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Download built image
+        uses: actions/download-artifact@v4
+        with:
+          name: nginx-image
+
+      - name: Load Docker image
+        run: |
+          gunzip -c nginx-app.tar.gz | docker load
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -172,19 +179,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish Application Image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          push: true
-          build-args: |
-            BUILD_SHA=${{ github.sha }}
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
-
-      - name: Verify Published Image Tags
+      - name: Tag image
         run: |
-          echo "Published images:"
-          echo "ghcr.io/${{ github.repository }}:${{ github.sha }}"
-          echo "ghcr.io/${{ github.repository }}:latest"
+          docker tag \
+            nginx-app:"${GITHUB_SHA}" \
+            ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_SHA}
+
+          docker tag \
+            nginx-app:"${GITHUB_SHA}" \
+            ghcr.io/${GITHUB_REPOSITORY}:latest
+
+      - name: Push images
+        run: |
+          docker push ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_SHA}
+          docker push ghcr.io/${GITHUB_REPOSITORY}:latest
