@@ -1,18 +1,32 @@
-# Loki and Grafana Setup
+# Loki, Promtail and Grafana Setup
 
-This directory contains the configuration used for the logging part of the
-DevOps assessment.
+This directory contains the centralized logging configuration used by the
+DevOps Intern Final Assessment.
 
-The stack consists of:
+The observability stack consists of:
 
-- Loki — log storage
-- Promtail — log collection
-- Grafana — log exploration
+- **Promtail** — discovers Docker containers and ships their logs.
+- **Loki** — stores and indexes the log streams.
+- **Grafana** — provides the LogQL-based visualization interface.
 
-## Start the stack
+The NGINX application writes access logs to stdout/stderr. Promtail discovers
+the `nginx-app` Docker container and forwards those logs to Loki.
 
-From the repository root:
+---
 
-```bash
-cd monitoring
-docker compose up -d
+## 1. Architecture
+
+```text
+NGINX container
+      |
+      | stdout / stderr
+      v
+  Promtail
+      |
+      | Loki Push API
+      v
+    Loki
+      |
+      | LogQL
+      v
+   Grafana
