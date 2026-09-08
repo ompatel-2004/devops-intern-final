@@ -1,17 +1,42 @@
 variable "image_tag" {
-  type        = string
-  description = "Docker image tag from GHCR to deploy"
-  default     = "latest"
+  type    = string
+  default = "latest"
 }
 
 job "nginx-app" {
   datacenters = ["dc1"]
   type        = "service"
 
-  group "web" {
+  update {
+    max_parallel      = 1
+    min_healthy_time  = "10s"
+    healthy_deadline  = "2m"
+    auto_revert       = true
+    canary            = 0
+  }
+
+  group "nginx" {
     count = 1
 
+    restart {
+      attempts = 3
+      interval = "30m"
+      delay    = "15s"
+      mode     = "fail"
+    }
+
+    reschedule {
+      attempts       = 3
+      interval       = "30m"
+      delay          = "15s"
+      delay_function = "exponential"
+      max_delay      = "5m"
+      unlimited      = false
+    }
+
     network {
+      mode = "bridge"
+
       port "http" {
         to = 8080
       }
@@ -22,7 +47,7 @@ job "nginx-app" {
       port = "http"
 
       check {
-        name     = "alive"
+        name     = "nginx-health"
         type     = "http"
         path     = "/healthz"
         interval = "10s"
@@ -30,28 +55,7 @@ job "nginx-app" {
       }
     }
 
-    restart {
-      attempts = 3
-      interval = "2m"
-      delay    = "15s"
-      mode     = "fail"
-    }
-
-    reschedule {
-      delay          = "30s"
-      delay_function = "exponential"
-      max_delay      = "1h"
-      unlimited      = true
-    }
-
-    update {
-      max_parallel     = 1
-      min_healthy_time = "10s"
-      healthy_deadline = "2m"
-      auto_revert      = true
-    }
-
-    task "server" {
+    task "nginx" {
       driver = "docker"
 
       config {
