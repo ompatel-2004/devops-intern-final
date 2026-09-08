@@ -173,15 +173,20 @@ jobs:
 
           if [ "$DOCKER_DETECTED" != "true" ]; then
             echo "ERROR: Nomad Docker driver is not detected."
+            echo "Docker socket:"
             ls -l /var/run/docker.sock || true
+            echo "Docker status:"
             docker info || true
+            echo "Nomad logs:"
             cat /tmp/nomad.log || true
             exit 1
           fi
 
           if [ "$DOCKER_HEALTHY" != "true" ]; then
             echo "ERROR: Nomad Docker driver is detected but not healthy."
+            echo "Docker status:"
             docker info || true
+            echo "Nomad logs:"
             cat /tmp/nomad.log || true
             exit 1
           fi
@@ -192,28 +197,46 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            IMAGE_TAG="latest"
-          fi
-
           nomad job validate \
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
       - name: Plan Nomad job
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            IMAGE_TAG="latest"
-          fi
+          PLAN_FILE="$(mktemp)"
 
           nomad job plan \
+            -no-color \
             -var="image_tag=${IMAGE_TAG}" \
-            nomad/nginx-app.nomad.hcl
+            nomad/nginx-app.nomad.hcl \
+            > "$PLAN_FILE" 2>&1
+
+          PLAN_EXIT_CODE=$?
+
+          cat "$PLAN_FILE"
+
+          if [ "$PLAN_EXIT_CODE" -eq 0 ]; then
+            echo "Nomad plan completed with no allocation changes."
+            exit 0
+          fi
+
+          if [ "$PLAN_EXIT_CODE" -eq 1 ]; then
+            if grep -q "All tasks successfully allocated." "$PLAN_FILE"; then
+              echo "Nomad plan completed successfully with allocation changes."
+              exit 0
+            fi
+
+            echo "ERROR: Nomad plan reported allocation placement problems."
+            exit 1
+          fi
+
+          echo "ERROR: Nomad plan failed with exit code ${PLAN_EXIT_CODE}."
+          exit 1
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -223,7 +246,7 @@ jobs:
               --password-stdin
 
       - name: Wait for immutable application image
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -236,7 +259,6 @@ jobs:
             if docker manifest inspect \
               "${IMAGE_NAME}:${IMAGE_TAG}" \
               >/dev/null 2>&1; then
-
               echo "Image is available in GHCR."
               break
             fi
@@ -252,7 +274,7 @@ jobs:
           done
 
       - name: Pull immutable application image
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -265,7 +287,7 @@ jobs:
             --format 'Digest: {{index .RepoDigests 0}}'
 
       - name: Run Nomad job
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -274,7 +296,7 @@ jobs:
             nomad/nginx-app.nomad.hcl
 
       - name: Wait for healthy allocation
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -324,14 +346,14 @@ jobs:
           done
 
       - name: Show Nomad job status
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
           nomad job status nginx-app
 
       - name: Verify allocation details
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -362,7 +384,7 @@ jobs:
               }'
 
       - name: Verify Consul service registration
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
@@ -411,7 +433,7 @@ jobs:
           fi
 
       - name: Verify dynamic HTTP port
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
 
