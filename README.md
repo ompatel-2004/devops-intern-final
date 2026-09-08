@@ -9,7 +9,7 @@
 - **Name:** Om Patel
 - **Role:** DevOps Intern
 - **Assessment:** DevOps Intern Final Assessment
-- **Submission Date:** September 2026
+- **Submission Date:**  09 September 2026
 - **Repository:** https://github.com/ompatel-2004/devops-intern-final
 - **Release:** `v1.0.0`
 - **Container Registry:** `ghcr.io/ompatel-2004/devops-intern-final`
