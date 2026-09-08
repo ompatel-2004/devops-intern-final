@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-TARGET_URL="${1:-http://localhost:8080}"
+URL="${1:-http://localhost:8080}"
 
-printf "Checking health endpoint: %s ... " "${TARGET_URL}"
-
-if ! command -v curl >/dev/null 2>&1; then
-    echo "ERROR: curl is required but not installed." >&2
-    exit 1
+if ! http_code="$(curl -sS -o /dev/null -w '%{http_code}' "$URL")"; then
+    http_code="000"
 fi
 
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${TARGET_URL}" || true)
-
-if [ "${HTTP_STATUS}" = "200" ]; then
-    printf "SUCCESS (HTTP 200)\n"
+if [ "$http_code" = "200" ]; then
+    echo "OK: $URL returned HTTP 200"
     exit 0
-else
-    printf "FAILED (HTTP %s)\n" "${HTTP_STATUS}" >&2
-    echo "Diagnostic: Target '${TARGET_URL}' failed health check." >&2
-    exit 1
 fi
+
+echo "FAIL: $URL returned HTTP $http_code (expected 200)"
+exit 1
