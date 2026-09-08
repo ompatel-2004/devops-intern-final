@@ -1,30 +1,18 @@
-# Log Aggregation Setup — Loki, Promtail & Grafana
+# Loki and Grafana Setup
 
-## 1. Overview
+This directory contains the configuration used for the logging part of the
+DevOps assessment.
 
-The monitoring stack collects NGINX container logs using:
+The stack consists of:
 
-- Grafana Loki — log aggregation and storage
-- Promtail — log collection and forwarding
-- Grafana — log exploration and visualization
+- Loki — log storage
+- Promtail — log collection
+- Grafana — log exploration
 
-The NGINX container writes access and error logs to stdout/stderr. Docker stores these container logs as JSON log files. Promtail discovers the Docker containers through the Docker API and collects logs only from the `nginx-app` container.
+## Start the stack
 
-## 2. Architecture
+From the repository root:
 
-```text
-NGINX Container
-      |
-      | stdout / stderr
-      v
-Docker JSON Logs
-      |
-      v
-Promtail
-      |
-      | HTTP push
-      v
-Loki
-      |
-      v
-Grafana Explore
+```bash
+cd monitoring
+docker compose up -d
