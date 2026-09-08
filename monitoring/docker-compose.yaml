@@ -1,28 +1,29 @@
 services:
   loki:
-    image: grafana/loki:3.0.0
+    image: grafana/loki:2.9.6
     container_name: loki
+    command:
+      - -config.file=/etc/loki/loki-config.yaml
     ports:
       - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
-    networks:
-      - monitoring
+      - ./loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
 
   promtail:
-    image: grafana/promtail:3.0.0
+    image: grafana/promtail:2.9.6
     container_name: promtail
+    command:
+      - -config.file=/etc/promtail/promtail-config.yaml
     volumes:
-      - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
-      - /var/log:/var/log:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    command: -config.file=/etc/promtail/config.yaml
-    networks:
-      - monitoring
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /tmp:/tmp
     depends_on:
       - loki
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:11.0.0
@@ -30,16 +31,15 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    networks:
-      - monitoring
+      - grafana-data:/var/lib/grafana
     depends_on:
       - loki
+    restart: unless-stopped
 
-networks:
-  monitoring:
-    driver: bridge
+volumes:
+  loki-data:
+  grafana-data:
