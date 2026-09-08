@@ -40,15 +40,20 @@ The implementation covers:
 - Loki log aggregation
 - Promtail log collection
 - Grafana log exploration
-- Reproducible documentation
-- Troubleshooting and validation evidence
+- Reproducible local installation
+- End-to-end validation
+- Troubleshooting documentation
+- Evidence screenshots
 
-The application serves a static page on port `8080` and provides a `/healthz` endpoint returning HTTP `200`.
+The application serves a static web page on port `8080` and provides a `/healthz` endpoint returning HTTP `200`.
 
 The application page displays:
 
 - Name
 - Assessment date
+- Application information
+- Port
+- Health endpoint
 - Build identifier injected during the Docker image build
 
 ---
@@ -97,7 +102,7 @@ The application page displays:
                                 v
                          NGINX Application
                                 |
-                                | container logs
+                                | Container Logs
                                 v
                             Promtail
                                 |
@@ -117,6 +122,7 @@ The application page displays:
 
 ```text
 devops-intern-final/
+│
 ├── README.md
 ├── .gitignore
 │
@@ -150,27 +156,39 @@ devops-intern-final/
 │
 └── docs/
     └── screenshots/
+        ├── NGINX Running.png
+        ├── ci test.png
+        ├── ci-build.png
+        ├── ci-pipeline.png
+        ├── ghcr-image.png
+        ├── grafana-loki.png
+        ├── nomad Validate-Plan-Run.png
+        ├── nomad health status.png
+        ├── nomad-consul-health.png
+        ├── nomad-deployment.png
+        ├── observability-validation.png
+        └── sysinfo-healthcheck.png
 ```
 
 ---
 
 # 4. Prerequisites
 
-The project can be checked locally using Docker Desktop and Git Bash on Windows, or equivalent Linux/macOS tools.
+The project can be tested locally using Docker Desktop and Git Bash on Windows, or equivalent Linux/macOS tooling.
 
 ## Required Tools
 
 | Tool | Version Used |
 |---|---|
-| Git | Any recent version |
+| Git | Recent version |
 | Docker | `29.7.2` |
 | Docker Compose | `v5.5.1` |
 | Nomad | `1.7.7` |
 | Consul | `1.17.2` |
-| ShellCheck | Required for script linting |
+| ShellCheck | Required for shell-script linting |
 | curl | Required for HTTP health checks |
 
-The container images used by the monitoring stack are pinned to:
+## Container Versions
 
 | Component | Version |
 |---|---|
@@ -183,13 +201,17 @@ The container images used by the monitoring stack are pinned to:
 
 # 5. Local Installation and Verification
 
-This section explains how another person can clone the repository and verify the project locally without relying on the GitHub Actions environment.
+This section explains how a reviewer can clone the repository and verify the application locally.
+
+The application can be tested without GitHub Actions or a remote Nomad cluster.
+
+---
 
 ## 5.1 Install Git
 
-Install Git for your operating system.
+Install Git for the operating system.
 
-Verify:
+Verify the installation:
 
 ```bash
 git --version
@@ -199,7 +221,7 @@ git --version
 
 ## 5.2 Install Docker
 
-Install Docker Desktop for Windows/macOS or Docker Engine for Linux.
+Install Docker Desktop on Windows/macOS or Docker Engine on Linux.
 
 Verify:
 
@@ -208,7 +230,7 @@ docker --version
 docker compose version
 ```
 
-Example environment used for validation:
+Example validation environment:
 
 ```text
 Docker version 29.7.2
@@ -223,11 +245,9 @@ Verify:
 docker info
 ```
 
-A successful `docker info` confirms that the Docker daemon is available.
-
 ---
 
-## 5.3 Install curl
+## 5.3 Verify curl
 
 Verify:
 
@@ -235,13 +255,11 @@ Verify:
 curl --version
 ```
 
-`curl` is used by the health-check script and for direct application verification.
+`curl` is used by the health-check script and for direct HTTP verification.
 
 ---
 
-## 5.4 Install ShellCheck
-
-ShellCheck is required to validate the shell scripts.
+## 5.4 Verify ShellCheck
 
 Verify:
 
@@ -249,7 +267,7 @@ Verify:
 shellcheck --version
 ```
 
-The repository scripts can then be checked with:
+Then run:
 
 ```bash
 shellcheck scripts/sysinfo.sh scripts/healthcheck.sh
@@ -261,8 +279,6 @@ A successful run produces no ShellCheck errors.
 
 ## 5.5 Clone the Repository
 
-Clone the public repository:
-
 ```bash
 git clone https://github.com/ompatel-2004/devops-intern-final.git
 ```
@@ -273,7 +289,7 @@ Enter the repository:
 cd devops-intern-final
 ```
 
-Check the current branch and repository state:
+Check the repository:
 
 ```bash
 git status
@@ -281,18 +297,31 @@ git status
 
 ---
 
-# 6. Local Application Verification
+# 6. Quick Start
 
-There are two ways to run the application locally:
+The following commands provide a minimal local application test.
 
-1. Build the Docker image from source.
-2. Pull the already-published image from GHCR.
+```bash
+git clone https://github.com/ompatel-2004/devops-intern-final.git
+cd devops-intern-final
+docker build --build-arg BUILD_SHA=local-test -t nginx-app:local ./app
+docker run -d --name nginx-app -p 8080:8080 nginx-app:local
+curl -i http://localhost:8080/
+curl -i http://localhost:8080/healthz
+./scripts/healthcheck.sh
+```
 
-Building from source is recommended when reviewing the repository.
+The application should be available at:
+
+```text
+http://localhost:8080
+```
 
 ---
 
-## 6.1 Build the Application Image
+# 7. Local Application Verification
+
+## 7.1 Build the Docker Image
 
 From the repository root:
 
@@ -303,13 +332,11 @@ docker build \
   ./app
 ```
 
-The `BUILD_SHA` argument is injected into the application during the image build.
+The `BUILD_SHA` value is injected into the image during the build.
 
 ---
 
-## 6.2 Check the Image
-
-List the image:
+## 7.2 Check the Image
 
 ```bash
 docker images nginx-app
@@ -323,9 +350,7 @@ docker image inspect nginx-app:local
 
 ---
 
-## 6.3 Run the Application
-
-Start the container:
+## 7.3 Run the Container
 
 ```bash
 docker run -d \
@@ -334,13 +359,13 @@ docker run -d \
   nginx-app:local
 ```
 
-Check that it is running:
+Check the running container:
 
 ```bash
 docker ps
 ```
 
-Expected result:
+Expected container:
 
 ```text
 nginx-app
@@ -348,40 +373,21 @@ nginx-app
 
 ---
 
-## 6.4 Check the Application Page
+## 7.4 Open the Application
 
-Open the application in a browser:
+Open the following address in a browser:
 
 ```text
 http://localhost:8080
 ```
 
-The page displays:
+The page displays the assessment information and build identifier.
 
-- Name
-- Assessment date
-- Application
-- Port
-- Health endpoint
-- Build identifier
-
-The build identifier should contain:
-
-```text
-local-test
-```
-
-because that value was supplied through:
-
-```bash
---build-arg BUILD_SHA=local-test
-```
+![NGINX Running](docs/screenshots/NGINX%20Running.png)
 
 ---
 
-## 6.5 Check the Health Endpoint
-
-Run:
+## 7.5 Test the Health Endpoint
 
 ```bash
 curl -i http://localhost:8080/healthz
@@ -393,7 +399,7 @@ Expected:
 HTTP/1.1 200 OK
 ```
 
-The response body is:
+Response:
 
 ```text
 ok
@@ -401,9 +407,7 @@ ok
 
 ---
 
-## 6.6 Check the Build SHA Header
-
-Run:
+## 7.6 Verify the Build Identifier
 
 ```bash
 curl -i http://localhost:8080/
@@ -415,13 +419,11 @@ The response includes:
 X-Build-SHA: local-test
 ```
 
-This confirms that the build identifier was injected during image creation.
+This verifies that the build identifier was injected during image creation.
 
 ---
 
-## 6.7 Run the Health Check Script
-
-Run:
+## 7.7 Run the Health Check Script
 
 ```bash
 ./scripts/healthcheck.sh
@@ -433,7 +435,7 @@ Expected:
 OK: http://localhost:8080 returned HTTP 200
 ```
 
-Explicitly test the health endpoint:
+Explicit health endpoint:
 
 ```bash
 ./scripts/healthcheck.sh http://localhost:8080/healthz
@@ -447,7 +449,7 @@ OK: http://localhost:8080/healthz returned HTTP 200
 
 ---
 
-## 6.8 Test a Failure Case
+## 7.8 Test Health Check Failure
 
 Run:
 
@@ -461,7 +463,7 @@ Expected:
 FAIL: http://localhost:8080/missing returned HTTP 404 (expected 200)
 ```
 
-The script returns a non-zero exit code:
+Check the exit status:
 
 ```bash
 echo $?
@@ -473,13 +475,11 @@ Expected:
 1
 ```
 
-This verifies that the script correctly fails when the HTTP response is not `200`.
+This confirms that the script correctly fails when the HTTP response is not `200`.
 
 ---
 
-## 6.9 Run the System Information Script
-
-Run:
+## 7.9 Run the System Information Script
 
 ```bash
 ./scripts/sysinfo.sh
@@ -520,11 +520,15 @@ Free Memory:  1.07 GB
 Docker daemon: running
 ```
 
+Evidence:
+
+![System Information and Health Check](docs/screenshots/sysinfo-healthcheck.png)
+
 ---
 
-## 6.10 Check Container Health
+## 7.10 Check Container Health
 
-Docker also provides the image health check.
+The Dockerfile defines a container health check.
 
 Run:
 
@@ -534,7 +538,7 @@ docker inspect \
   nginx-app
 ```
 
-After the health check has executed, the expected status is:
+Expected after the health check runs:
 
 ```text
 healthy
@@ -542,7 +546,7 @@ healthy
 
 ---
 
-## 6.11 Check Non-root Execution
+## 7.11 Verify Non-root Execution
 
 Run:
 
@@ -550,70 +554,21 @@ Run:
 docker exec nginx-app id
 ```
 
-The output should show the application user rather than `root`.
+The application runs as the configured non-root user.
 
 ---
 
-## 6.12 Check Container Logs
-
-Run:
+## 7.12 View Container Logs
 
 ```bash
 docker logs nginx-app
 ```
 
-This displays the NGINX container logs that are later collected by Promtail in the monitoring setup.
+The NGINX access logs are later collected by Promtail.
 
 ---
 
-## 6.13 Stop the Local Application
-
-When finished:
-
-```bash
-docker rm -f nginx-app
-```
-
----
-
-# 7. Published GHCR Image Verification
-
-Instead of building locally, the published image can also be tested directly.
-
-Pull the image:
-
-```bash
-docker pull ghcr.io/ompatel-2004/devops-intern-final:latest
-```
-
-Run it:
-
-```bash
-docker run -d \
-  --name nginx-app \
-  -p 8080:8080 \
-  ghcr.io/ompatel-2004/devops-intern-final:latest
-```
-
-Verify:
-
-```bash
-curl -i http://localhost:8080/
-```
-
-Verify health:
-
-```bash
-curl -i http://localhost:8080/healthz
-```
-
-Expected:
-
-```text
-HTTP/1.1 200 OK
-```
-
-Remove the container when finished:
+## 7.13 Stop the Application
 
 ```bash
 docker rm -f nginx-app
@@ -637,9 +592,15 @@ Both scripts use:
 set -euo pipefail
 ```
 
-The scripts are executable in Git.
+## ShellCheck
 
-Verify their permissions:
+Run:
+
+```bash
+shellcheck scripts/sysinfo.sh scripts/healthcheck.sh
+```
+
+## Verify Git Executable Permissions
 
 ```bash
 git ls-files --stage scripts/sysinfo.sh scripts/healthcheck.sh
@@ -651,17 +612,11 @@ The expected file mode is:
 100755
 ```
 
-ShellCheck validation:
-
-```bash
-shellcheck scripts/sysinfo.sh scripts/healthcheck.sh
-```
-
 ---
 
 # 9. Containerisation
 
-The Docker application is located under:
+The application container is located under:
 
 ```text
 app/
@@ -670,7 +625,7 @@ app/
 └── nginx.conf
 ```
 
-The Dockerfile uses the pinned NGINX image:
+The Dockerfile uses the pinned NGINX base image:
 
 ```dockerfile
 FROM nginx:1.27-alpine
@@ -678,13 +633,15 @@ FROM nginx:1.27-alpine
 
 The container:
 
-- Runs as a non-root user.
-- Listens on port `8080`.
-- Exposes port `8080`.
-- Provides `/healthz`.
-- Includes a Docker `HEALTHCHECK`.
-- Injects `BUILD_SHA`.
-- Adds the build identifier to the HTTP response header.
+- Runs as a non-root user
+- Listens on port `8080`
+- Exposes port `8080`
+- Provides `/healthz`
+- Includes a Docker `HEALTHCHECK`
+- Injects `BUILD_SHA`
+- Adds the build identifier to the HTTP response header
+
+---
 
 ## Build
 
@@ -704,6 +661,12 @@ docker run -d \
   nginx-app:local
 ```
 
+## Homepage
+
+```bash
+curl -i http://localhost:8080/
+```
+
 ## Health
 
 ```bash
@@ -716,7 +679,7 @@ Expected:
 HTTP/1.1 200 OK
 ```
 
-## Build Identifier
+## Build SHA
 
 ```bash
 curl -i http://localhost:8080/
@@ -730,14 +693,14 @@ X-Build-SHA: local-test
 
 ## Image Size
 
-Check the image size:
+Check:
 
 ```bash
 docker image inspect nginx-app:local \
   --format='{{.Size}} bytes'
 ```
 
-The validated image size was below the required `60 MB` limit.
+The validated image is below the required `60 MB` limit.
 
 ---
 
@@ -758,15 +721,20 @@ The pipeline performs:
 
 ```text
 ShellCheck
-    ↓
+    |
+    v
 Hadolint
-    ↓
+    |
+    v
 Docker Build
-    ↓
+    |
+    v
 Application Tests
-    ↓
+    |
+    v
 Health Check
-    ↓
+    |
+    v
 GHCR Publication
 ```
 
@@ -786,7 +754,7 @@ The test stage verifies:
 - Build SHA
 - Container behaviour
 
-The workflow publishes to GHCR only on pushes to `main`.
+GHCR publication occurs only on pushes to `main`.
 
 Published tags:
 
@@ -795,23 +763,88 @@ Published tags:
 latest
 ```
 
-GHCR authentication uses the GitHub-provided `GITHUB_TOKEN`.
+GitHub Actions uses the provided `GITHUB_TOKEN` for GHCR authentication.
 
-No long-lived registry credentials are stored in the repository.
+No long-lived registry credentials are committed to the repository.
+
+---
 
 ## CI Evidence
 
+### CI Pipeline
+
 ![CI Pipeline](docs/screenshots/ci-pipeline.png)
+
+### Docker Build
 
 ![CI Build](docs/screenshots/ci-build.png)
 
-![CI Test](docs/screenshots/ci-test.png)
+### CI Test
+
+![CI Test](docs/screenshots/ci%20test.png)
+
+### GHCR Image
 
 ![GHCR Image](docs/screenshots/ghcr-image.png)
 
 ---
 
-# 11. Nomad Deployment
+# 11. GHCR Image
+
+The final application image is published to:
+
+```text
+ghcr.io/ompatel-2004/devops-intern-final
+```
+
+The main branch publishes:
+
+```text
+latest
+```
+
+and a commit-SHA tag.
+
+Pull the image:
+
+```bash
+docker pull ghcr.io/ompatel-2004/devops-intern-final:latest
+```
+
+Run:
+
+```bash
+docker run -d \
+  --name nginx-app \
+  -p 8080:8080 \
+  ghcr.io/ompatel-2004/devops-intern-final:latest
+```
+
+Verify:
+
+```bash
+curl -i http://localhost:8080/
+```
+
+Health:
+
+```bash
+curl -i http://localhost:8080/healthz
+```
+
+Remove the container:
+
+```bash
+docker rm -f nginx-app
+```
+
+Evidence:
+
+![GHCR Image](docs/screenshots/ghcr-image.png)
+
+---
+
+# 12. Nomad Deployment
 
 The Nomad job specification is:
 
@@ -819,7 +852,7 @@ The Nomad job specification is:
 nomad/nginx-app.nomad.hcl
 ```
 
-The job uses:
+The job contains:
 
 - Service job type
 - One group
@@ -842,7 +875,61 @@ The job uses:
 - Restart policy
 - Reschedule policy
 
-## Validate
+---
+
+## 12.1 Install Nomad
+
+Nomad version used for validation:
+
+```text
+1.7.7
+```
+
+Verify:
+
+```bash
+nomad version
+```
+
+---
+
+## 12.2 Install Consul
+
+Consul version used for validation:
+
+```text
+1.17.2
+```
+
+Verify:
+
+```bash
+consul version
+```
+
+---
+
+## 12.3 Start Local Nomad and Consul
+
+For local testing, Nomad and Consul can be started in development mode.
+
+Start Consul:
+
+```bash
+consul agent -dev
+```
+
+In another terminal, start Nomad:
+
+```bash
+nomad agent -dev -bind=0.0.0.0
+```
+
+The Docker daemon must also be running.
+
+---
+
+## 12.4 Validate Nomad Job
 
 ```bash
 nomad job validate nomad/nginx-app.nomad.hcl
@@ -854,7 +941,9 @@ Expected:
 Job validation successful
 ```
 
-## Plan
+---
+
+## 12.5 Plan the Job
 
 ```bash
 nomad job plan \
@@ -862,7 +951,9 @@ nomad job plan \
   nomad/nginx-app.nomad.hcl
 ```
 
-## Run
+---
+
+## 12.6 Run the Job
 
 ```bash
 nomad job run \
@@ -870,13 +961,15 @@ nomad job run \
   nomad/nginx-app.nomad.hcl
 ```
 
-## Check Job
+---
+
+## 12.7 Check Job Status
 
 ```bash
 nomad job status nginx-app
 ```
 
-Expected state:
+Expected deployment state:
 
 ```text
 Desired: 1
@@ -885,13 +978,23 @@ Healthy: 1
 Unhealthy: 0
 ```
 
-## Check Allocation
+---
+
+## 12.8 Check Allocation
+
+Get the allocation ID:
+
+```bash
+nomad job status nginx-app
+```
+
+Then:
 
 ```bash
 nomad alloc status <allocation-id>
 ```
 
-The validated allocation showed:
+The validated deployment showed:
 
 ```text
 Client Status: running
@@ -900,9 +1003,11 @@ CPU: 0 / 100 MHz
 Memory: 5.0 MiB / 64 MiB
 ```
 
-## Consul Health Check
+---
 
-The service is registered with Consul as:
+## 12.9 Consul Health Check
+
+The service is registered in Consul as:
 
 ```text
 Service: nginx-app
@@ -912,21 +1017,31 @@ Interval: 10s
 Timeout: 2s
 ```
 
-The health check validates the dynamically allocated HTTP port and expects HTTP `200`.
-
-## Nomad Evidence
-
-![Nomad Validate Plan Run](docs/screenshots/nomad-validate-plan-run.png)
-
-![Nomad Health Status](docs/screenshots/nomad-health-status.png)
-
-![Nomad Deployment](docs/screenshots/nomad-deployment.png)
-
-![Consul Health](docs/screenshots/nomad-consul-health.png)
+The check validates the dynamically allocated HTTP port and expects HTTP `200`.
 
 ---
 
-# 12. Local Loki, Promtail and Grafana
+## Nomad Evidence
+
+### Nomad Validate, Plan and Run
+
+![Nomad Validate Plan Run](docs/screenshots/nomad%20Validate-Plan-Run.png)
+
+### Nomad Health Status
+
+![Nomad Health Status](docs/screenshots/nomad%20health%20status.png)
+
+### Nomad Deployment
+
+![Nomad Deployment](docs/screenshots/nomad-deployment.png)
+
+### Consul Health
+
+![Nomad Consul Health](docs/screenshots/nomad-consul-health.png)
+
+---
+
+# 13. Loki, Promtail and Grafana
 
 The monitoring stack is located under:
 
@@ -948,25 +1063,30 @@ monitoring/
 └── loki_setup.md
 ```
 
-The stack is:
+The monitoring flow is:
 
 ```text
 NGINX
-  ↓
+   |
+   v
 Docker Logs
-  ↓
+   |
+   v
 Promtail
-  ↓
+   |
+   v
 Loki
-  ↓
+   |
+   v
 Grafana
-  ↓
+   |
+   v
 LogQL
 ```
 
 ---
 
-## 12.1 Start the Monitoring Stack
+# 14. Start the Monitoring Stack
 
 From the repository root:
 
@@ -989,7 +1109,7 @@ promtail
 grafana
 ```
 
-The validated versions are:
+Versions:
 
 ```text
 Loki:     2.9.6
@@ -999,23 +1119,23 @@ Grafana:  11.0.0
 
 ---
 
-## 12.2 Verify Loki
+# 15. Verify Loki
 
-Open:
-
-```text
-http://localhost:3100
-```
-
-Or check its readiness endpoint:
+Check Loki readiness:
 
 ```bash
 curl http://localhost:3100/ready
 ```
 
+Loki is exposed locally on:
+
+```text
+http://localhost:3100
+```
+
 ---
 
-## 12.3 Open Grafana
+# 16. Open Grafana
 
 Open:
 
@@ -1034,7 +1154,7 @@ The Loki datasource is provisioned automatically.
 
 ---
 
-## 12.4 Start NGINX for Log Testing
+# 17. Generate NGINX Logs
 
 Return to the repository root:
 
@@ -1042,7 +1162,7 @@ Return to the repository root:
 cd ..
 ```
 
-Build:
+Build the application:
 
 ```bash
 docker build \
@@ -1060,11 +1180,7 @@ docker run -d \
   nginx-app:local
 ```
 
----
-
-## 12.5 Generate a Deliberate HTTP 404
-
-Generate an NGINX access-log entry:
+Generate a deliberate HTTP `404`:
 
 ```bash
 curl -i http://localhost:8080/assessment-missing-path
@@ -1076,11 +1192,11 @@ Expected:
 HTTP/1.1 404 Not Found
 ```
 
-This deliberately generates a non-200 NGINX access log.
+This creates a non-200 NGINX access-log entry.
 
 ---
 
-## 12.6 Verify Docker Logs
+# 18. Verify Docker Logs
 
 Run:
 
@@ -1090,9 +1206,15 @@ docker logs nginx-app
 
 The generated request should appear in the NGINX access logs.
 
+Example:
+
+```text
+GET /assessment-missing-path HTTP/1.1" 404
+```
+
 ---
 
-## 12.7 Verify Loki Labels
+# 19. Verify Loki Labels
 
 Run:
 
@@ -1100,7 +1222,7 @@ Run:
 curl -s http://localhost:3100/loki/api/v1/labels
 ```
 
-The Promtail configuration provides labels including:
+Promtail provides labels including:
 
 ```text
 container
@@ -1118,7 +1240,7 @@ service   = nginx-app
 
 ---
 
-## 12.8 Query Logs in Grafana
+# 20. Query Logs in Grafana
 
 Open:
 
@@ -1126,19 +1248,19 @@ Open:
 http://localhost:3000
 ```
 
-Go to:
+Navigate to:
 
 ```text
 Explore → Loki
 ```
 
-Run:
+Run the following LogQL query:
 
 ```logql
 {container="nginx-app"} |= "404"
 ```
 
-This query isolates NGINX log entries containing HTTP `404`.
+The query isolates NGINX log entries containing HTTP `404`.
 
 The observed result included:
 
@@ -1150,21 +1272,26 @@ This confirms:
 
 ```text
 NGINX
-  ↓
-Docker logs
-  ↓
+   |
+   v
+Docker Logs
+   |
+   v
 Promtail
-  ↓
+   |
+   v
 Loki
-  ↓
+   |
+   v
 Grafana
-  ↓
+   |
+   v
 LogQL
 ```
 
 ## Grafana Evidence
 
-![Grafana Loki Explore](docs/screenshots/grafana-loki-explore.png)
+![Grafana Loki](docs/screenshots/grafana-loki.png)
 
 Additional monitoring instructions are available in:
 
@@ -1174,62 +1301,37 @@ monitoring/loki_setup.md
 
 ---
 
-# 13. Continuous Integration and Deployment Flow
+# 21. Observability Validation
 
-The complete application flow is:
+The observability validation workflow verifies the monitoring configuration and supporting components.
+
+The workflow is:
 
 ```text
-Developer
-    |
-    v
-Git Feature Branch
-    |
-    v
-Pull Request
-    |
-    v
-GitHub Actions
-    |
-    +--> ShellCheck
-    |
-    +--> Hadolint
-    |
-    +--> Docker Build
-    |
-    +--> Application Tests
-    |
-    +--> Health Check
-    |
-    v
-GHCR
-    |
-    v
-Nomad
-    |
-    v
-Consul
-    |
-    v
-NGINX
-    |
-    v
-Promtail
-    |
-    v
+Docker
+   |
+   v
 Loki
-    |
-    v
-Grafana
-    |
-    v
-LogQL
+   |
+   v
+Promtail
+   |
+   v
+Log Collection
+   |
+   v
+LogQL Verification
 ```
+
+Evidence:
+
+![Observability Validation](docs/screenshots/observability-validation.png)
 
 ---
 
-# 14. End-to-End Validation
+# 22. End-to-End Validation
 
-The project was validated across the complete workflow rather than only by checking individual configuration files.
+The project was validated across the complete workflow instead of only checking individual configuration files.
 
 The final validation demonstrates:
 
@@ -1255,9 +1357,9 @@ The final validation demonstrates:
 
 ---
 
-# 15. Troubleshooting
+# 23. Troubleshooting
 
-## Nomad Binary Extraction Conflict
+## 23.1 Nomad Binary Extraction Conflict
 
 The repository contains a directory named:
 
@@ -1273,7 +1375,7 @@ The repository `nomad/` directory remains dedicated to the Nomad job specificati
 
 ---
 
-## Nomad Docker Driver Not Detected
+## 23.2 Nomad Docker Driver Not Detected
 
 Nomad initially could not detect the Docker driver.
 
@@ -1287,7 +1389,7 @@ After the correction, the Docker driver was detected and the deployment succeede
 
 ---
 
-## Incorrect Nomad Driver JSON Field
+## 23.3 Incorrect Nomad Driver JSON Field
 
 The validation workflow initially checked an incorrect JSON field when verifying Docker driver availability.
 
@@ -1302,9 +1404,9 @@ Driver validation then succeeded.
 
 ---
 
-## GHCR Image Unavailable During Pull Request Validation
+## 23.4 GHCR Image Unavailable During Pull Request Validation
 
-Pull-request validation attempted to use a SHA-tagged image that had not yet been published.
+Pull-request validation initially attempted to use a SHA-tagged image that had not yet been published.
 
 GHCR publication is restricted to pushes to `main`.
 
@@ -1312,7 +1414,7 @@ The workflow was therefore structured so that pull requests validate the Nomad c
 
 ---
 
-## Nomad Plan Exit Code
+## 23.5 Nomad Plan Exit Code
 
 During validation, `nomad job plan` returned exit code `1` even though the output indicated a valid plan and successful task allocation.
 
@@ -1320,7 +1422,7 @@ The validation workflow was adjusted to distinguish a valid Nomad plan result fr
 
 ---
 
-## Loki Log Verification
+## 23.6 Loki Log Verification
 
 Starting Loki and Promtail alone did not demonstrate that NGINX logs were being ingested.
 
@@ -1342,11 +1444,17 @@ The resulting NGINX access log was then located in Grafana using:
 {container="nginx-app"} |= "404"
 ```
 
-This confirmed the complete NGINX → Promtail → Loki → Grafana path.
+This confirmed the complete:
+
+```text
+NGINX → Promtail → Loki → Grafana
+```
+
+log pipeline.
 
 ---
 
-# 16. Security
+# 24. Security
 
 The repository does not contain:
 
@@ -1361,15 +1469,19 @@ GitHub Actions authenticates to GHCR using:
 GITHUB_TOKEN
 ```
 
-with the required package permissions.
-
 No long-lived registry credentials are committed to the repository.
 
-Grafana's `admin/admin` credentials are intended only for the local assessment environment and should not be used as production credentials.
+Grafana's:
+
+```text
+admin/admin
+```
+
+credentials are intended only for the local assessment environment and should not be used as production credentials.
 
 ---
 
-# 17. Known Limitations
+# 25. Known Limitations
 
 This implementation is an assessment environment rather than a production deployment platform.
 
@@ -1393,13 +1505,23 @@ Potential production improvements include:
 
 ---
 
-# 18. Evidence Screenshots
+# 26. Evidence Screenshots
 
-All supporting evidence is stored under:
+All assessment evidence is stored in:
 
 ```text
 docs/screenshots/
 ```
+
+The repository contains the following evidence:
+
+## NGINX Application Running
+
+![NGINX Running](docs/screenshots/NGINX%20Running.png)
+
+## System Information and Health Check
+
+![System Information and Health Check](docs/screenshots/sysinfo-healthcheck.png)
 
 ## CI Pipeline
 
@@ -1409,37 +1531,41 @@ docs/screenshots/
 
 ![CI Build](docs/screenshots/ci-build.png)
 
-## Application Tests
+## CI Test
 
-![CI Test](docs/screenshots/ci-test.png)
+![CI Test](docs/screenshots/ci%20test.png)
 
-## GHCR Publication
+## GHCR Image
 
 ![GHCR Image](docs/screenshots/ghcr-image.png)
 
-## Nomad Validation, Plan and Run
+## Nomad Validate, Plan and Run
 
-![Nomad Validate Plan Run](docs/screenshots/nomad-validate-plan-run.png)
+![Nomad Validate Plan Run](docs/screenshots/nomad%20Validate-Plan-Run.png)
 
 ## Nomad Health Status
 
-![Nomad Health Status](docs/screenshots/nomad-health-status.png)
+![Nomad Health Status](docs/screenshots/nomad%20health%20status.png)
+
+## Consul Health
+
+![Nomad Consul Health](docs/screenshots/nomad-consul-health.png)
 
 ## Nomad Deployment
 
 ![Nomad Deployment](docs/screenshots/nomad-deployment.png)
 
-## Consul Health
+## Observability Validation
 
-![Consul Health](docs/screenshots/nomad-consul-health.png)
+![Observability Validation](docs/screenshots/observability-validation.png)
 
-## Grafana Loki Explore
+## Grafana Loki
 
-![Grafana Loki Explore](docs/screenshots/grafana-loki-explore.png)
+![Grafana Loki](docs/screenshots/grafana-loki.png)
 
 ---
 
-# 19. Final Verification
+# 27. Final Verification
 
 The completed repository contains:
 
@@ -1447,7 +1573,7 @@ The completed repository contains:
 - Feature branch workflow
 - Pull-request workflow
 - Final `v1.0.0` release tag
-- Linux shell scripts
+- Shell scripts
 - ShellCheck validation
 - Hadolint validation
 - Pinned NGINX base image
@@ -1465,6 +1591,7 @@ The completed repository contains:
 - Troubleshooting documentation
 - Known limitations
 - Supporting screenshots
+- Local installation and verification instructions
 
 Final release:
 
@@ -1492,7 +1619,7 @@ ghcr.io/ompatel-2004/devops-intern-final:latest
 
 ---
 
-# 20. Submission
+# 28. Submission
 
 Repository:
 
