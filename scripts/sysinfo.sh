@@ -1,38 +1,36 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-echo "=========================================="
-echo "          SYSTEM INFORMATION              "
-echo "=========================================="
+echo "=== System Information ==="
+echo "User: $(id -un)"
+echo "Effective UID: $(id -u)"
+echo "Hostname: $(hostname)"
+echo "Kernel Release: $(uname -r)"
+echo "System Date (ISO-8601): $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-echo "User / Effective UID:"
-printf "  User: %s (UID: %s)\n" "$(id -un)" "$(id -u)"
+echo
+echo "--- Disk Usage (human-readable) ---"
+df -h
 
-printf "\nHostname & Kernel:\n"
-printf "  Hostname: %s\n" "$(hostname)"
-printf "  Kernel:   %s\n" "$(uname -r)"
+echo
+echo "--- Memory Usage ---"
 
-printf "\nSystem Date (ISO-8601):\n"
-printf "  %s\n" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-printf "\nDisk Usage:\n"
-df -h / | awk 'NR==1 || NR==2 {print "  " $0}'
-
-printf "\nMemory Usage:\n"
 if command -v free >/dev/null 2>&1; then
-    free -h | awk '{print "  " $0}'
+    free -h
+elif command -v vm_stat >/dev/null 2>&1; then
+    vm_stat
 else
-    echo "  'free' utility not available on this host"
+    echo "Memory information command is not available on this system."
 fi
 
-printf "\nDocker Daemon Status:\n"
-if command -v docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-        echo "  Docker is running"
-    else
-        echo "  Docker daemon is not accessible / stopped"
-    fi
+echo
+echo "--- Docker Daemon Status ---"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker daemon: docker CLI not installed"
+elif docker info >/dev/null 2>&1; then
+    echo "Docker daemon: running"
 else
-    echo "  Docker is not installed"
+    echo "Docker daemon: not running or not accessible"
 fi
-echo "=========================================="
