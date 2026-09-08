@@ -1,6 +1,7 @@
 variable "image_tag" {
-  type    = string
-  default = "latest"
+  type        = string
+  description = "Docker image tag from GHCR to deploy"
+  default     = "latest"
 }
 
 job "nginx-app" {
@@ -9,7 +10,7 @@ job "nginx-app" {
 
   update {
     max_parallel     = 1
-    min_healthy_time = "10s"
+    min_healthy_time = "5s"
     healthy_deadline = "2m"
     auto_revert      = true
   }
@@ -19,7 +20,7 @@ job "nginx-app" {
 
     restart {
       attempts = 3
-      interval = "30m"
+      interval = "10m"
       delay    = "15s"
       mode     = "fail"
     }
@@ -34,8 +35,6 @@ job "nginx-app" {
     }
 
     network {
-      mode = "bridge"
-
       port "http" {
         to = 8080
       }
@@ -43,8 +42,8 @@ job "nginx-app" {
 
     service {
       name     = "nginx-app"
-      provider = "consul"
       port     = "http"
+      provider = "consul"
 
       check {
         name     = "nginx-health"
