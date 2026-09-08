@@ -39,27 +39,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build Docker image
         run: |
           docker build \
-            --build-arg BUILD_SHA="${GITHUB_SHA}" \
-            --tag nginx-app:"${GITHUB_SHA}" \
+            --build-arg BUILD_SHA="${{ github.sha }}" \
+            --tag "nginx-app:${{ github.sha }}" \
             ./app
 
-      - name: Show image details
+      - name: Verify image size and non-root user
         run: |
-          docker image inspect nginx-app:"${GITHUB_SHA}" \
-            --format='Image size: {{.Size}} bytes'
+          SIZE_BYTES="$(docker image inspect "nginx-app:${{ github.sha }}" \
+            --format='{{.Size}}')"
 
-          docker image inspect nginx-app:"${GITHUB_SHA}" \
-            --format='User: {{.Config.User}}'
+          USER_NAME="$(docker image inspect "nginx-app:${{ github.sha }}" \
+            --format='{{.Config.User}}')"
 
-      - name: Save image
+          echo "Image size: ${SIZE_BYTES} bytes"
+          echo "Configured user: ${USER_NAME}"
+
+          if [ "${SIZE_BYTES}" -ge 60000000 ]; then
+            echo "ERROR: Docker image is 60 MB or larger."
+            exit 1
+          fi
+
+          if [ -z "${USER_NAME}" ] || [ "${USER_NAME}" = "0" ] || [ "${USER_NAME}" = "root" ]; then
+            echo "ERROR: Container is configured to run as root."
+            exit 1
+          fi
+
+          echo "Image is below 60 MB and configured for a non-root user."
+
+      - name: Save built image
         run: |
-          docker save nginx-app:"${GITHUB_SHA}" \
+          docker save "nginx-app:${{ github.sha }}" \
             | gzip > nginx-app.tar.gz
 
       - name: Upload built image
@@ -92,7 +104,7 @@ jobs:
           docker run -d \
             --name nginx-app \
             -p 8080:8080 \
-            nginx-app:"${GITHUB_SHA}"
+            "nginx-app:${{ github.sha }}"
 
       - name: Wait for application
         run: |
@@ -102,11 +114,11 @@ jobs:
               exit 0
             fi
 
-            echo "Waiting for application..."
+            echo "Waiting for application... (${i}/30)"
             sleep 2
           done
 
-          echo "Application did not become ready."
+          echo "ERROR: Application did not become ready."
           docker logs nginx-app
           exit 1
 
@@ -114,6 +126,7 @@ jobs:
         run: |
           curl -fsS http://localhost:8080/ > /tmp/homepage.html
           grep -q "DevOps Intern Final Assessment" /tmp/homepage.html
+          grep -q "${{ github.sha }}" /tmp/homepage.html
 
       - name: Test health endpoint
         run: |
@@ -122,37 +135,46 @@ jobs:
       - name: Run healthcheck script
         run: |
           chmod +x scripts/healthcheck.sh
-          ./scripts/healthcheck.sh http://localhost:8080
+          ./scripts/healthcheck.sh http://localhost:8080/healthz
 
       - name: Verify non-root user
         run: |
           USER_ID="$(docker exec nginx-app id -u)"
+          USER_NAME="$(docker exec nginx-app id -un)"
+
           echo "Container UID: ${USER_ID}"
+          echo "Container user: ${USER_NAME}"
 
           if [ "${USER_ID}" = "0" ]; then
-            echo "NGINX is running as root."
+            echo "ERROR: NGINX is running as root."
             exit 1
           fi
 
           echo "NGINX is running as a non-root user."
 
-      - name: Verify build SHA
+      - name: Verify build SHA response header
         run: |
-          curl -fsSI http://localhost:8080/ | grep -i "^X-Build-SHA:"
-          curl -fsS http://localhost:8080/ | grep -q "${GITHUB_SHA}"
+          curl -fsSI http://localhost:8080/ \
+            | grep -i "^X-Build-SHA:"
+
+          curl -fsSI http://localhost:8080/ \
+            | grep -i "${{ github.sha }}"
 
       - name: Show container logs
         if: always()
-        run: docker logs nginx-app
+        run: |
+          docker logs nginx-app
 
       - name: Stop container
         if: always()
-        run: docker rm -f nginx-app || true
+        run: |
+          docker rm -f nginx-app || true
 
   publish:
     name: Publish to GHCR
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     runs-on: ubuntu-latest
 
     permissions:
@@ -160,9 +182,6 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Download built image
         uses: actions/download-artifact@v4
         with:
@@ -182,14 +201,19 @@ jobs:
       - name: Tag image
         run: |
           docker tag \
-            nginx-app:"${GITHUB_SHA}" \
-            ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_SHA}
+            "nginx-app:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository }}:${{ github.sha }}"
 
           docker tag \
-            nginx-app:"${GITHUB_SHA}" \
-            ghcr.io/${GITHUB_REPOSITORY}:latest
+            "nginx-app:${{ github.sha }}" \
+            "ghcr.io/${{ github.repository }}:latest"
 
-      - name: Push images
+      - name: Push immutable SHA image
         run: |
-          docker push ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_SHA}
-          docker push ghcr.io/${GITHUB_REPOSITORY}:latest
+          docker push \
+            "ghcr.io/${{ github.repository }}:${{ github.sha }}"
+
+      - name: Push latest image
+        run: |
+          docker push \
+            "ghcr.io/${{ github.repository }}:latest"
