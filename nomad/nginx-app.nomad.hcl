@@ -8,11 +8,10 @@ job "nginx-app" {
   type        = "service"
 
   update {
-    max_parallel      = 1
-    min_healthy_time  = "10s"
-    healthy_deadline  = "2m"
-    auto_revert       = true
-    canary            = 0
+    max_parallel     = 1
+    min_healthy_time = "10s"
+    healthy_deadline = "2m"
+    auto_revert      = true
   }
 
   group "nginx" {
@@ -43,8 +42,9 @@ job "nginx-app" {
     }
 
     service {
-      name = "nginx-app"
-      port = "http"
+      name     = "nginx-app"
+      provider = "consul"
+      port     = "http"
 
       check {
         name     = "nginx-health"
