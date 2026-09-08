@@ -257,7 +257,7 @@ jobs:
             )"
 
             if [ -n "$RUNNING" ]; then
-              echo "Allocation is running!"
+              echo "Allocation is Healthy!"
               break
             fi
 
