@@ -54,7 +54,10 @@ jobs:
 
           mkdir -p "$TMP_DIR/nomad"
           unzip -q "$TMP_DIR/nomad.zip" -d "$TMP_DIR/nomad"
-          sudo install -m 0755 "$TMP_DIR/nomad/nomad" /usr/local/bin/nomad
+
+          sudo install -m 0755 \
+            "$TMP_DIR/nomad/nomad" \
+            /usr/local/bin/nomad
 
           curl -fsSL \
             -o "$TMP_DIR/consul.zip" \
@@ -62,7 +65,10 @@ jobs:
 
           mkdir -p "$TMP_DIR/consul"
           unzip -q "$TMP_DIR/consul.zip" -d "$TMP_DIR/consul"
-          sudo install -m 0755 "$TMP_DIR/consul/consul" /usr/local/bin/consul
+
+          sudo install -m 0755 \
+            "$TMP_DIR/consul/consul" \
+            /usr/local/bin/consul
 
           nomad version
           consul version
@@ -90,7 +96,10 @@ jobs:
             > /tmp/consul.log 2>&1 &
 
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8500/v1/status/leader | grep -q '"'; then
+            if curl -fsS \
+              http://127.0.0.1:8500/v1/status/leader \
+              | grep -q '"'; then
+
               echo "Consul is ready."
               break
             fi
@@ -138,7 +147,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          NODE_ID="$(nomad node status -self -json | jq -r '.ID')"
+          NODE_ID="$(
+            nomad node status -self -json \
+              | jq -r '.ID'
+          )"
 
           if [ -z "$NODE_ID" ] || [ "$NODE_ID" = "null" ]; then
             echo "Nomad node ID was not found."
@@ -146,22 +158,45 @@ jobs:
             exit 1
           fi
 
-          DRIVER_STATUS="$(nomad node status -self -json | jq -r '.Drivers.docker.detected // false')"
+          echo "Nomad node ID: ${NODE_ID}"
 
-          echo "Docker driver detected: ${DRIVER_STATUS}"
-
+          echo "Nomad driver status:"
           nomad node status -self -verbose
 
-          if [ "$DRIVER_STATUS" != "true" ]; then
-            echo "Nomad Docker driver is not detected."
+          DOCKER_DETECTED="$(
+            nomad node status -self -json \
+              | jq -r '.Drivers.docker.Detected // false'
+          )"
+
+          DOCKER_HEALTHY="$(
+            nomad node status -self -json \
+              | jq -r '.Drivers.docker.Healthy // false'
+          )"
+
+          echo "Docker driver detected: ${DOCKER_DETECTED}"
+          echo "Docker driver healthy: ${DOCKER_HEALTHY}"
+
+          if [ "$DOCKER_DETECTED" != "true" ]; then
+            echo "ERROR: Nomad Docker driver is not detected."
             echo "Docker socket:"
-            ls -l /var/run/docker.sock
+            ls -l /var/run/docker.sock || true
             echo "Docker status:"
-            docker info
+            docker info || true
             echo "Nomad logs:"
-            cat /tmp/nomad.log
+            cat /tmp/nomad.log || true
             exit 1
           fi
+
+          if [ "$DOCKER_HEALTHY" != "true" ]; then
+            echo "ERROR: Nomad Docker driver is detected but not healthy."
+            echo "Docker status:"
+            docker info || true
+            echo "Nomad logs:"
+            cat /tmp/nomad.log || true
+            exit 1
+          fi
+
+          echo "Nomad Docker driver is detected and healthy."
 
       - name: Log in to GHCR
         run: |
@@ -239,6 +274,8 @@ jobs:
                       | any(. == "passing")
                     '
               )"
+
+              echo "Nomad health check passing: ${HEALTHY}"
 
               if [ "$HEALTHY" = "true" ]; then
                 echo "Healthy allocation confirmed."
@@ -373,6 +410,7 @@ jobs:
             if curl -fsS \
               "http://127.0.0.1:${HOST_PORT}/healthz" \
               >/dev/null; then
+
               break
             fi
 
@@ -385,6 +423,7 @@ jobs:
           done
 
           echo "Application health check through Nomad dynamic port:"
+
           curl -i \
             "http://127.0.0.1:${HOST_PORT}/healthz"
 
