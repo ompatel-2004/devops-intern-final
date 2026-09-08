@@ -181,7 +181,6 @@ jobs:
 
           cat "$PLAN_FILE"
 
-          # Exit code 0 indicates no changes; exit code 1 indicates proposed allocation changes (normal for new deployments)
           if [ "$PLAN_EXIT_CODE" -eq 0 ] || [ "$PLAN_EXIT_CODE" -eq 1 ]; then
             echo "Nomad plan executed successfully."
           else
@@ -205,7 +204,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          nomad job run \
+          nomad job run -detach \
             -var="image_tag=${IMAGE_TAG}" \
             nomad/nginx-app.nomad.hcl
 
@@ -213,14 +212,15 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+          echo "Waiting for task allocation to enter running status..."
           for i in $(seq 1 40); do
-            echo "===== Nomad status attempt ${i}/40 ====="
-            RUNNING_COUNT=$(nomad job status nginx-app | awk '/running/ {print $1}' | wc -l)
-            if [ "$RUNNING_COUNT" -ge 1 ]; then
+            RUNNING=$(nomad job status nginx-app | awk '/running/ {print $1}' | head -n 1)
+            if [ -n "$RUNNING" ]; then
               echo "Allocation is running!"
               break
             fi
-            sleep 2
+            echo "Waiting for allocation ($i/40)..."
+            sleep 3
           done
 
           nomad job status nginx-app
@@ -264,7 +264,6 @@ jobs:
             ALLOC_ID="$(nomad job allocs -json nginx-app | jq -r '.[0].ID')"
           fi
 
-          # Extract the dynamic host port allocated to the "http" port label
           HOST_PORT="$(nomad alloc status -json "$ALLOC_ID" | jq -r '.AllocatedResources.Shared.Networks[0].DynamicPorts[] | select(.Label == "http") | .Value')"
 
           if [ -z "$HOST_PORT" ] || [ "$HOST_PORT" = "null" ]; then
