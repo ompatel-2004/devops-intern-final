@@ -1,0 +1,545 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Temporary DevOps assessment lab for Om Patel.
+  Creates a disposable AWS environment containing one EC2 instance,
+  Docker, Nomad, Consul, and the tooling required for NGINX deployment
+  and Loki/Grafana observability.
+
+Parameters:
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.small
+      - t3.medium
+    Description: EC2 instance size for the temporary assessment lab.
+
+  AdminCidr:
+    Type: String
+    Description: >
+      Your current public IPv4 address in CIDR notation.
+      Example: 203.0.113.10/32.
+      This CIDR is used to restrict access to NGINX, Grafana and Nomad UI.
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$'
+    ConstraintDescription: Enter an IPv4 CIDR such as 203.0.113.10/32.
+
+  GitHubRepository:
+    Type: String
+    Default: https://github.com/ompatel-2004/devops-intern-final.git
+    Description: Public GitHub repository containing the assessment project.
+
+  GitRef:
+    Type: String
+    Default: main
+    Description: Git branch, tag or commit to use when cloning the repository.
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.50.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+        - Key: Project
+          Value: devops-intern-assessment
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-igw'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.50.1.0/24
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-subnet'
+        - Key: Project
+          Value: devops-intern-assessment
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-routes'
+
+  DefaultInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  LabSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access rules for the temporary DevOps assessment lab.
+      VpcId: !Ref VPC
+
+      SecurityGroupIngress:
+
+        - Description: NGINX application
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AdminCidr
+
+        - Description: Grafana
+          IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AdminCidr
+
+        - Description: Nomad UI
+          IpProtocol: tcp
+          FromPort: 4646
+          ToPort: 4646
+          CidrIp: !Ref AdminCidr
+
+      SecurityGroupEgress:
+
+        - Description: Allow outbound internet access.
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-security-group'
+        - Key: Project
+          Value: devops-intern-assessment
+
+  LabInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ec2-role-${AWS::AccountId}'
+      Description: IAM role for the temporary DevOps assessment EC2 instance.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+      Tags:
+        - Key: Project
+          Value: devops-intern-assessment
+
+  LabInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref LabInstanceRole
+
+  LabInstance:
+    Type: AWS::EC2::Instance
+
+    Metadata:
+      Comment: Temporary DevOps assessment laboratory.
+
+    Properties:
+
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+
+      InstanceType: !Ref InstanceType
+
+      IamInstanceProfile: !Ref LabInstanceProfile
+
+      SubnetId: !Ref PublicSubnet
+
+      SecurityGroupIds:
+        - !Ref LabSecurityGroup
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2'
+        - Key: Project
+          Value: devops-intern-assessment
+        - Key: ManagedBy
+          Value: CloudFormation
+
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+
+            set -u
+
+            LOG_FILE="/var/log/devops-assessment-bootstrap.log"
+
+            exec > >(tee -a "${LOG_FILE}") 2>&1
+
+            echo "=========================================="
+            echo "DevOps Assessment Lab Bootstrap"
+            echo "Started: $(date -u)"
+            echo "=========================================="
+
+            echo
+            echo "=== Updating operating system ==="
+            dnf update -y
+
+            echo
+            echo "=== Installing base packages ==="
+            dnf install -y \
+              docker \
+              git \
+              curl \
+              wget \
+              unzip \
+              jq \
+              tar \
+              gzip
+
+            echo
+            echo "=== Starting Docker ==="
+            systemctl enable docker
+            systemctl start docker
+
+            usermod -aG docker ec2-user || true
+
+            echo
+            echo "=== Docker version ==="
+            docker --version
+
+            echo
+            echo "=== Docker Compose ==="
+
+            if docker compose version >/dev/null 2>&1; then
+              echo "Docker Compose plugin already available."
+              docker compose version
+            else
+              echo "Installing Docker Compose plugin."
+
+              mkdir -p /usr/local/lib/docker/cli-plugins
+
+              curl -fsSL \
+                https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 \
+                -o /usr/local/lib/docker/cli-plugins/docker-compose
+
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+              docker compose version
+            fi
+
+            echo
+            echo "=== Installing Consul ==="
+
+            CONSUL_VERSION="1.20.6"
+
+            curl -fsSL \
+              "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip" \
+              -o /tmp/consul.zip
+
+            unzip -o /tmp/consul.zip -d /tmp/consul
+
+            install -m 0755 /tmp/consul/consul /usr/local/bin/consul
+
+            consul version
+
+            echo
+            echo "=== Installing Nomad ==="
+
+            NOMAD_VERSION="1.10.15"
+
+            curl -fsSL \
+              "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip" \
+              -o /tmp/nomad.zip
+
+            unzip -o /tmp/nomad.zip -d /tmp/nomad
+
+            install -m 0755 /tmp/nomad/nomad /usr/local/bin/nomad
+
+            nomad version
+
+            echo
+            echo "=== Creating Consul directories ==="
+
+            mkdir -p \
+              /etc/consul.d \
+              /opt/consul/data \
+              /var/log/consul
+
+            chown -R root:root \
+              /etc/consul.d \
+              /opt/consul \
+              /var/log/consul
+
+            echo
+            echo "=== Creating Consul configuration ==="
+
+            cat > /etc/consul.d/consul.hcl <<'EOF'
+            datacenter = "dc1"
+
+            data_dir = "/opt/consul/data"
+
+            server = true
+
+            bootstrap_expect = 1
+
+            bind_addr = "{{ GetInterfaceIP \"eth0\" }}"
+
+            advertise_addr = "{{ GetInterfaceIP \"eth0\" }}"
+
+            client_addr = "127.0.0.1"
+
+            ui_config {
+              enabled = true
+            }
+
+            log_level = "INFO"
+            EOF
+
+            echo
+            echo "=== Creating Consul systemd service ==="
+
+            cat > /etc/systemd/system/consul.service <<'EOF'
+            [Unit]
+            Description=HashiCorp Consul
+            Documentation=https://developer.hashicorp.com/consul
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=root
+            Group=root
+            ExecStart=/usr/local/bin/consul agent -config-dir=/etc/consul.d
+            ExecReload=/bin/kill -HUP $MAINPID
+            KillSignal=SIGINT
+            Restart=on-failure
+            RestartSec=5
+            LimitNOFILE=65536
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            echo
+            echo "=== Creating Nomad directories ==="
+
+            mkdir -p \
+              /etc/nomad.d \
+              /opt/nomad/data \
+              /var/log/nomad
+
+            chown -R root:root \
+              /etc/nomad.d \
+              /opt/nomad \
+              /var/log/nomad
+
+            echo
+            echo "=== Creating Nomad configuration ==="
+
+            cat > /etc/nomad.d/nomad.hcl <<'EOF'
+            datacenter = "dc1"
+
+            data_dir = "/opt/nomad/data"
+
+            bind_addr = "0.0.0.0"
+
+            advertise {
+              http = "{{ GetInterfaceIP \"eth0\" }}"
+              rpc  = "{{ GetInterfaceIP \"eth0\" }}"
+              serf = "{{ GetInterfaceIP \"eth0\" }}"
+            }
+
+            server {
+              enabled = true
+              bootstrap_expect = 1
+            }
+
+            client {
+              enabled = true
+            }
+
+            consul {
+              address = "127.0.0.1:8500"
+              auto_advertise = true
+              server_auto_join = false
+              client_auto_join = false
+            }
+            EOF
+
+            echo
+            echo "=== Creating Nomad systemd service ==="
+
+            cat > /etc/systemd/system/nomad.service <<'EOF'
+            [Unit]
+            Description=HashiCorp Nomad
+            Documentation=https://developer.hashicorp.com/nomad
+            Wants=network-online.target
+            After=network-online.target docker.service consul.service
+            Requires=docker.service consul.service
+
+            [Service]
+            User=root
+            Group=root
+            ExecStart=/usr/local/bin/nomad agent -config=/etc/nomad.d
+            ExecReload=/bin/kill -HUP $MAINPID
+            KillSignal=SIGINT
+            Restart=on-failure
+            RestartSec=5
+            LimitNOFILE=65536
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            echo
+            echo "=== Enabling services ==="
+
+            systemctl daemon-reload
+
+            systemctl enable consul
+            systemctl enable nomad
+
+            echo
+            echo "=== Starting Consul ==="
+
+            systemctl start consul
+
+            sleep 5
+
+            echo
+            echo "=== Consul status ==="
+
+            systemctl --no-pager --full status consul || true
+
+            echo
+            echo "=== Starting Nomad ==="
+
+            systemctl start nomad
+
+            sleep 8
+
+            echo
+            echo "=== Nomad status ==="
+
+            systemctl --no-pager --full status nomad || true
+
+            echo
+            echo "=== Creating workspace ==="
+
+            mkdir -p /opt/devops-assessment
+
+            chown ec2-user:ec2-user /opt/devops-assessment
+
+            echo
+            echo "=== Cloning project repository ==="
+
+            if git clone \
+              --branch '${GitRef}' \
+              --single-branch \
+              '${GitHubRepository}' \
+              /opt/devops-assessment/repository; then
+
+              chown -R ec2-user:ec2-user /opt/devops-assessment/repository
+
+              echo "Repository cloned successfully."
+
+            else
+
+              echo "Repository clone failed."
+              echo "The infrastructure is still available."
+
+            fi
+
+            echo
+            echo "=========================================="
+            echo "Bootstrap completed: $(date -u)"
+            echo "=========================================="
+
+            echo
+            echo "Installed versions:"
+            docker --version || true
+            docker compose version || true
+            consul version || true
+            nomad version || true
+
+            echo
+            echo "Service status:"
+            systemctl is-active docker || true
+            systemctl is-active consul || true
+            systemctl is-active nomad || true
+
+  BootstrapLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/${AWS::StackName}/bootstrap'
+      RetentionInDays: 1
+
+Outputs:
+
+  StackName:
+    Description: CloudFormation stack name.
+    Value: !Ref AWS::StackName
+
+  InstanceId:
+    Description: EC2 instance ID.
+    Value: !Ref LabInstance
+
+  InstancePublicIp:
+    Description: Public IPv4 address of the assessment EC2 instance.
+    Value: !GetAtt LabInstance.PublicIp
+
+  InstancePublicDns:
+    Description: Public DNS name of the assessment EC2 instance.
+    Value: !GetAtt LabInstance.PublicDnsName
+
+  ApplicationURL:
+    Description: NGINX application URL after deployment.
+    Value: !Sub 'http://${LabInstance.PublicIp}:8080'
+
+  GrafanaURL:
+    Description: Grafana URL after monitoring stack is started.
+    Value: !Sub 'http://${LabInstance.PublicIp}:3000'
+
+  NomadURL:
+    Description: Nomad UI URL.
+    Value: !Sub 'http://${LabInstance.PublicIp}:4646'
+
+  SessionManagerNote:
+    Description: Use AWS Systems Manager Session Manager instead of SSH.
+    Value: 'EC2 Console -> Connect -> Session Manager'
